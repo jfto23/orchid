@@ -4,7 +4,7 @@ use ggez::conf;
 
 use mint;
 
-use rand;
+use rand::Rng;
 
 use std::env;
 use std::path;
@@ -14,15 +14,18 @@ use std::f32::consts;
 const SHIP_SPEED: f32 = 350.0;
 const BOSS_SPEED: f32 = 125.0;
 const BULLET_SPEED: f32 = 500.0;
-const FIRE_RATE: f64 = 200.0;
+const PLAYER_FIRE_RATE: f64 = 200.0;
+const BOSS_FIRE_RATE: f64 = 250.0;
 const SPECIAL_BULLET_SPEED: f32 = 250.0;
 const SPECIAL_BULLET_COOLDOWN: f32 = 5.0;
-const SPECIAL_BULLET_DAMAGE: f32 = 10.0;
+const SPECIAL_BULLET_DAMAGE: f32 = 5.0;
 const GREEN: graphics::Color = graphics::Color::new(0.0, 255.0, 0.0, 1.0);
 const RED: graphics::Color = graphics::Color::new(255.0, 0.0, 0.0, 1.0);
 const SCREEN_BORDER: f32 = 20.0;
-const SHIELD_COOLDOWN: f32 = 20.0;
+const SHIELD_COOLDOWN: f32 = 15.0;
 const SHIELD_DURATION: f32 = 2.0;
+const BOSS_HEALTH: f32 = 100.0;
+
 
 struct Assets {
     player_ship: graphics::Image,
@@ -38,14 +41,14 @@ struct Assets {
 impl Assets {
     fn new(ctx: &mut Context) -> Assets {
         Assets {
-            player_ship: graphics::Image::new(ctx, "/player_ship.png").unwrap(),
+            player_ship: graphics::Image::new(ctx, "/player_shipv2.png").unwrap(),
             enemy_ship: graphics::Image::new(ctx, "/enemy_ship.png").unwrap(),
             player_bullet: graphics::Image::new(ctx, "/player_bullet2.png").unwrap(),
             enemy_bullet: graphics::Image::new(ctx, "/enemy_bullet.png").unwrap(),
             player_dead: graphics::Image::new(ctx, "/player_ship_dead.png").unwrap(),
             special_bullet: graphics::Image::new(ctx, "/special_bullet.png").unwrap(),
             font: graphics::Font::new(ctx, "/ARCADE_N.TTF").unwrap(),
-            shield: graphics::Image::new(ctx, "/player_ship_shieldv2.png").unwrap(),
+            shield: graphics::Image::new(ctx, "/shieldv2.png").unwrap(),
 
         }
     }
@@ -140,7 +143,7 @@ impl Ship {
             }
             Possession::Enemy => {
                 Ship {
-                    health: 10.0,
+                    health: BOSS_HEALTH,
                     ship_type: ship_type,
                     pos: mint::Point2{ x:400.0, y:50.0 },
                     angle: consts::PI,
@@ -217,7 +220,6 @@ impl Ship {
     }
 }
 
-// holds input state of player ship
 struct InputState {
     up: bool,
     down: bool,
@@ -239,16 +241,6 @@ impl InputState {
             special: false,
             shield: false,
         }
-    }
-
-    fn reset(&mut self) {
-        self.up = false;
-        self.down = false;
-        self.right = false;
-        self.left = false;
-        self.fire = false;
-        self.special = false;
-        self.shield = false;
     }
 }
 
@@ -301,14 +293,12 @@ struct MainState {
     enemy_fire_delay: f64,
     special_timer: f32,
     shield_timer: f32,
-    // keeps track of how long the shield is active
     shield_active: f32,
     state: State
 }
 
 impl MainState {
     pub fn new(ctx: &mut Context) -> MainState {
-        // Load/create resources such as images here.
         MainState {
             player_ship: Ship::new(Possession::Player),
             enemy_ship: Ship::new(Possession::Enemy),
@@ -435,7 +425,7 @@ impl EventHandler for MainState {
         if now >= self.player_fire_delay && self.input_state.fire {
             self.bullets.push(self.player_ship.shoot(None, BulletType::Normal));
 
-            self.player_fire_delay = now + FIRE_RATE;
+            self.player_fire_delay = now + PLAYER_FIRE_RATE;
         }
 
         self.special_timer -= dt;
@@ -467,11 +457,20 @@ impl EventHandler for MainState {
                     self.bullets.push(self.enemy_ship.shoot(Some(consts::PI/4.0), BulletType::Normal));
                     self.bullets.push(self.enemy_ship.shoot(Some(-1.0 * consts::PI/4.0), BulletType::Normal));
                     self.bullets.push(self.enemy_ship.shoot(None, BulletType::Normal));
+
+                    let rand_angle = rand::thread_rng().gen_range(-1.0 * consts::PI/4.0, consts::PI/4.0);
+                    self.bullets.push(self.enemy_ship.shoot(Some(rand_angle), BulletType::Normal));
+
+                    if self.enemy_ship.health < BOSS_HEALTH/2.0 {
+                        let rand_angle2 = rand::thread_rng().gen_range(-1.0 * consts::PI/4.0, consts::PI/4.0);
+                        self.bullets.push(self.enemy_ship.shoot(Some(rand_angle2), BulletType::Normal));
+
+                    }
                 }
 
             }
 
-            self.enemy_fire_delay = now + FIRE_RATE;
+            self.enemy_fire_delay = now + BOSS_FIRE_RATE;
         }
 
 
