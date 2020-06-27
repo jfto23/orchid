@@ -10,3 +10,4 @@ edition = "2018"
 ggez = "0.5"
 mint = "0.5.5"
 rand = "0.7"
+gwg = {git = "https://github.com/not-fl3/good-web-game", package="good-web-game", branch = "master"}
