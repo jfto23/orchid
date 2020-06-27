@@ -262,8 +262,8 @@ fn main() -> GameResult{
         path::PathBuf::from("./resources")
     };
 
-    let cb = ContextBuilder::new("0RCH1D", "me")
-        .window_setup(conf::WindowSetup::default().title("0RCH1D"))
+    let cb = ContextBuilder::new("Orchid", "jfto23")
+        .window_setup(conf::WindowSetup::default().title("Orchid"))
         .add_resource_path(resource_dir);
 
     let (ctx, event_loop) = &mut cb.build().expect("failed to build");
