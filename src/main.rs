@@ -1,16 +1,11 @@
-use gwg as ggez;
-use ggez::{graphics, Context, ContextBuilder, GameResult};
-use ggez::event::{self, EventHandler, KeyCode, KeyMods};
-use ggez::conf;
+use ggez::{graphics, Context, GameResult};
+use ggez::event::{EventHandler, KeyCode, KeyMods};
+use ggez::rand;
 
+use gwg as ggez;
 
 use mint;
 
-use rand::Rng;
-
-use std::env;
-use std::path;
-use std::time::{SystemTime, UNIX_EPOCH};
 use std::f32::consts;
 
 const SHIP_SPEED: f32 = 350.0;
@@ -43,14 +38,14 @@ struct Assets {
 impl Assets {
     fn new(ctx: &mut Context) -> Assets {
         Assets {
-            player_ship: graphics::Image::new(ctx, "/player_shipv2.png").unwrap(),
-            enemy_ship: graphics::Image::new(ctx, "/enemy_ship.png").unwrap(),
-            player_bullet: graphics::Image::new(ctx, "/player_bullet2.png").unwrap(),
-            enemy_bullet: graphics::Image::new(ctx, "/enemy_bullet.png").unwrap(),
-            player_dead: graphics::Image::new(ctx, "/player_ship_dead.png").unwrap(),
-            special_bullet: graphics::Image::new(ctx, "/special_bullet.png").unwrap(),
-            font: graphics::Font::new(ctx, "/ARCADE_N.TTF").unwrap(),
-            shield: graphics::Image::new(ctx, "/shieldv2.png").unwrap(),
+            player_ship: graphics::Image::new(ctx, "player_shipv2.png").unwrap(),
+            enemy_ship: graphics::Image::new(ctx, "enemy_ship.png").unwrap(),
+            player_bullet: graphics::Image::new(ctx, "player_bullet2.png").unwrap(),
+            enemy_bullet: graphics::Image::new(ctx, "enemy_bullet.png").unwrap(),
+            player_dead: graphics::Image::new(ctx, "player_ship_dead.png").unwrap(),
+            special_bullet: graphics::Image::new(ctx, "special_bullet.png").unwrap(),
+            font: graphics::Font::new(ctx, "ARCADE_N.TTF").unwrap(),
+            shield: graphics::Image::new(ctx, "shieldv2.png").unwrap(),
 
         }
     }
@@ -194,17 +189,27 @@ impl Ship {
         if self.health < 0.0 {
             return
         }
+
         if input_state.up && self.pos.y >= SCREEN_BORDER {
-            self.pos.y -= dt *SHIP_SPEED
+            self.pos.y -= dt *SHIP_SPEED;
         }
         if input_state.down && self.pos.y <= height - SCREEN_BORDER {
-            self.pos.y += dt *SHIP_SPEED
+            self.pos.y += dt *SHIP_SPEED;
+            if self.pos.y >= height - SCREEN_BORDER {
+                self.pos.y = height - SCREEN_BORDER;
+            }
         }
         if input_state.right && self.pos.x <= width - SCREEN_BORDER {
-            self.pos.x += dt *SHIP_SPEED
+            self.pos.x += dt *SHIP_SPEED;
+            if self.pos.x >= width - SCREEN_BORDER {
+                self.pos.x = width - SCREEN_BORDER;
+            }
         }
         if input_state.left && self.pos.x >= SCREEN_BORDER {
-            self.pos.x -= dt *SHIP_SPEED
+            self.pos.x -= dt *SHIP_SPEED;
+            if self.pos.x <= SCREEN_BORDER {
+                self.pos.x = SCREEN_BORDER;
+            }
         }
     }
 
@@ -255,24 +260,14 @@ enum Possession {
 
 
 fn main() -> GameResult{
-    let resource_dir = if let Ok(manifest_dir) = env::var("CARGO_MANIFEST_DIR") {
-        let mut path = path::PathBuf::from(manifest_dir);
-        path.push("resources");
-        path
-    }
-    else {
-        path::PathBuf::from("./resources")
-    };
-
-    let cb = ContextBuilder::new("0RCH1D", "me")
-        .window_setup(conf::WindowSetup::default().title("0RCH1D"))
-        .add_resource_path(resource_dir);
-
-    let (ctx, event_loop) = &mut cb.build().expect("failed to build");
- 
-    let mut my_game = MainState::new(ctx);
-
-    event::run(ctx, event_loop, &mut my_game)
+    ggez::start(
+        ggez::conf::Conf {
+            cache: ggez::conf::Cache::Tar(include_bytes!("resources.tar").to_vec()),
+            loading: ggez::conf::Loading::Embedded,
+            ..Default::default()
+        },
+        |mut context| Box::new(MainState::new(&mut context)),
+        )
 }
 
 fn distance_2d(p1: mint::Point2<f32>, p2: mint::Point2<f32>) -> f32{
@@ -283,6 +278,7 @@ enum State {
     Playing,
     Won,
     Lost,
+    Loading,
 }
 
 struct MainState {
@@ -297,7 +293,8 @@ struct MainState {
     shield_timer: f32,
     // keeps track of how long the shield is active
     shield_active: f32,
-    state: State
+    state: State,
+    now: f64,
 }
 
 impl MainState {
@@ -313,7 +310,8 @@ impl MainState {
             special_timer: 0.0,
             shield_timer: 0.0,
             shield_active: 0.0,
-            state: State::Playing,
+            state: State::Loading,
+            now: 0.0,
         }
     }
 
@@ -361,7 +359,8 @@ impl MainState {
             self.special_timer = 0.0;
             self.shield_timer = 0.0;
             self.shield_active = 0.0;
-            self.state = State::Playing;
+            self.state = State::Loading;
+            self.now = 0.0;
     }
 
 
@@ -388,13 +387,19 @@ impl MainState {
     }
 
     fn draw_death_screen(&mut self, ctx: &mut Context) {
+        let (width, height) = graphics::drawable_size(ctx);
+        let (x, y) = ((width as f32)/2.0, (height as f32)/2.0);
+
         let text = graphics::Text::new(("YOU DIED",self.assets.font,16.0));
-        graphics::draw(ctx, &text, (mint::Point2{x:350.0,y:100.0}, 0.0, graphics::WHITE)).unwrap();
+        graphics::draw(ctx, &text, (mint::Point2{x:x,y:y}, 0.0, graphics::WHITE)).unwrap();
     }
 
     fn draw_win_screen(&mut self, ctx: &mut Context) {
+        let (width, height) = graphics::drawable_size(ctx);
+        let (x, y) = ((width as f32)/2.0, (height as f32)/2.0);
+
         let text = graphics::Text::new(("YOU WON",self.assets.font,16.0));
-        graphics::draw(ctx, &text, (mint::Point2{x:350.0,y:100.0}, 0.0, graphics::WHITE)).unwrap();
+        graphics::draw(ctx, &text, (mint::Point2{ x:x, y:y }, 0.0, graphics::WHITE)).unwrap();
     }
 }
 
@@ -403,6 +408,7 @@ impl EventHandler for MainState {
         let dt = ggez::timer::duration_to_f64(ggez::timer::delta(ctx)) as f32;
 
         let (width, height) = graphics::drawable_size(ctx);
+        let (width, height) = (width as f32, height as f32);
 
         self.player_ship.update_pos(dt, &self.input_state, width, height);
 
@@ -420,15 +426,13 @@ impl EventHandler for MainState {
                             && !bullet.hit);
 
         // add delay between shots
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("couldn't get time")
-            .as_millis() as f64;
+        self.now += (dt * 1000.0) as f64;
 
-        if now >= self.player_fire_delay && self.input_state.fire {
+
+        if self.now >= self.player_fire_delay && self.input_state.fire {
             self.bullets.push(self.player_ship.shoot(None, BulletType::Normal));
 
-            self.player_fire_delay = now + PLAYER_FIRE_RATE;
+            self.player_fire_delay = self.now + PLAYER_FIRE_RATE;
         }
 
         self.special_timer -= dt;
@@ -453,19 +457,20 @@ impl EventHandler for MainState {
 
 
 
-        if now >= self.enemy_fire_delay {
+        if self.now >= self.enemy_fire_delay {
             match self.state {
+                State::Loading => {},
                 State::Won => {},
                 _ => {
                     self.bullets.push(self.enemy_ship.shoot(Some(consts::PI/4.0), BulletType::Normal));
                     self.bullets.push(self.enemy_ship.shoot(Some(-1.0 * consts::PI/4.0), BulletType::Normal));
                     self.bullets.push(self.enemy_ship.shoot(None, BulletType::Normal));
 
-                    let rand_angle = rand::thread_rng().gen_range(-1.0 * consts::PI/4.0, consts::PI/4.0);
+                    let rand_angle = rand::gen_range(-1.0 * consts::PI/4.0, consts::PI/4.0);
                     self.bullets.push(self.enemy_ship.shoot(Some(rand_angle), BulletType::Normal));
 
                     if self.enemy_ship.health < BOSS_HEALTH/2.0 {
-                        let rand_angle2 = rand::thread_rng().gen_range(-1.0 * consts::PI/4.0, consts::PI/4.0);
+                        let rand_angle2 = rand::gen_range(-1.0 * consts::PI/4.0, consts::PI/4.0);
                         self.bullets.push(self.enemy_ship.shoot(Some(rand_angle2), BulletType::Normal));
 
                     }
@@ -473,7 +478,7 @@ impl EventHandler for MainState {
 
             }
 
-            self.enemy_fire_delay = now + BOSS_FIRE_RATE;
+            self.enemy_fire_delay = self.now + BOSS_FIRE_RATE;
         }
 
 
@@ -511,7 +516,6 @@ impl EventHandler for MainState {
 
         graphics::present(ctx)?;
 
-        ggez::timer::yield_now();
 
         Ok(())
     }
@@ -519,7 +523,6 @@ impl EventHandler for MainState {
     fn key_down_event(&mut self, ctx: &mut Context, key: KeyCode, _mods: KeyMods, _: bool) {
 
             match key {
-                KeyCode::Q => ggez::event::quit(ctx),
                 KeyCode::R => self.reset(ctx),
                 _ => {},
             }
@@ -533,6 +536,16 @@ impl EventHandler for MainState {
                     KeyCode::Space => self.input_state.fire = true,
                     KeyCode::J => self.input_state.special = true,
                     KeyCode::K => self.input_state.shield = true,
+                    _ => {},
+                }
+
+                match key {
+                    KeyCode::W | KeyCode::S | KeyCode::A | KeyCode::D | KeyCode::Space | KeyCode::J | KeyCode::K => {
+                        match self.state {
+                            State::Loading => self.state = State::Playing,
+                            _ => {},
+                        }
+                    }
 
                     _ => {},
                 }
