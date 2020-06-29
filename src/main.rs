@@ -430,7 +430,10 @@ impl EventHandler for MainState {
 
 
         if self.now >= self.player_fire_delay && self.input_state.fire {
-            self.bullets.push(self.player_ship.shoot(None, BulletType::Normal));
+            match self.state {
+                State::Playing | State::Won => self.bullets.push(self.player_ship.shoot(None, BulletType::Normal)),
+                _ => {},
+            }
 
             self.player_fire_delay = self.now + PLAYER_FIRE_RATE;
         }
