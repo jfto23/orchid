@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+    <meta charset="utf-8">
+    <title>Orchid</title>
+		<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+    <style>
+        html,
+        body,
+        canvas {
+            margin: 0px;
+            padding: 0px;
+            width: 800px;
+            height: 800px;
+            overflow: hidden;
+            background: black;
+            z-index: 0;
+						border: 2px solid white;
+        }
+
+				body {
+					color: white;
+					font-family: 'Press Start 2P';
+					font-size: 12px;
+
+				}
+
+				.container {
+					border: 2px solid white;
+					position: absolute;
+					top: 0px;
+					margin-left: 850px;
+					width: 200px;
+					height: 300px;
+					padding: 10px;
+				}
+
+				li,ul {
+					list-style-type: none;
+					margin: 0px;
+					padding: 5px;
+				}
+
+				a {
+					color: white;
+				}
+
+    </style>
+</head>
+
+<body>
+	<canvas id="glcanvas" tabindex='1'></canvas>
+	<div class="container">
+		Controls: 
+		<ul>
+			<li>WASD: Move</li>
+			<li>Space: Shoot</li>
+			<li>J: Special</li>
+			<li>K: Shield</li>
+			<li>R: Restart</li>
+		</ul>
+		<br>
+		<a href="https://github.com/jfto23/orchid">Source Code</a>
+		
+	</div>
+    <!-- Minified and statically hosted version of https://github.com/not-fl3/miniquad/blob/master/native/sapp-wasm/js/gl.js -->
+    <script src="./gl.js"></script>
+    <script>load("./first_game.wasm");</script> <!-- Your compiled wasm file -->
+</body>
+
+</html>
+
