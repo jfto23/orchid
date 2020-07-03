@@ -1,7 +1,7 @@
 # Orchid
 
 _orchid_ is a space shooter game written in Rust. You can play it
-[here](https://jfto23.github.io/orchid/)
+[here](https://jfto23.github.io/orchid/).
 
 ![](https://github.com/jfto23/orchid/blob/master/orchid_pic.png)
 

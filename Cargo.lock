@@ -125,6 +125,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b41b7ea54a0c9d92199de89e20e58d49f02f8e699814ef3fdf266f6f748d15c7"
 
 [[package]]
+name = "bincode"
+version = "1.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f30d3a39baa26f9651f17b375061f3233dde33424a8b72b0dbe93a68a0bc896d"
+dependencies = [
+ "byteorder",
+ "serde",
+]
+
+[[package]]
 name = "bindgen"
 version = "0.53.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -516,9 +526,11 @@ dependencies = [
 name = "first_game"
 version = "0.1.0"
 dependencies = [
+ "bincode",
  "ggez",
  "mint",
  "rand 0.7.3",
+ "serde",
 ]
 
 [[package]]
@@ -1816,6 +1828,9 @@ name = "serde"
 version = "1.0.113"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6135c78461981c79497158ef777264c51d9d0f4f3fc3a4d22b915900e42dac6a"
+dependencies = [
+ "serde_derive",
+]
 
 [[package]]
 name = "serde_derive"

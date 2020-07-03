@@ -2,6 +2,8 @@ use ggez::{graphics, Context, ContextBuilder, GameResult};
 use ggez::event::{self, EventHandler, KeyCode, KeyMods};
 use ggez::conf;
 
+use serde::{Serialize, Deserialize};
+
 use mint;
 
 use rand::Rng;
@@ -10,6 +12,7 @@ use std::env;
 use std::path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::f32::consts;
+use std::net::{UdpSocket, SocketAddrV4};
 
 const SHIP_SPEED: f32 = 350.0;
 const BOSS_SPEED: f32 = 125.0;
@@ -26,6 +29,12 @@ const SHIELD_COOLDOWN: f32 = 15.0;
 const SHIELD_DURATION: f32 = 2.0;
 const BOSS_HEALTH: f32 = 100.0;
 
+#[derive(Serialize, Deserialize, Copy, Clone)]
+// define own point to encode it
+struct Point {
+    x: f32,
+    y: f32,
+}
 
 struct Assets {
     player_ship: graphics::Image,
@@ -49,20 +58,21 @@ impl Assets {
             special_bullet: graphics::Image::new(ctx, "/special_bullet.png").unwrap(),
             font: graphics::Font::new(ctx, "/ARCADE_N.TTF").unwrap(),
             shield: graphics::Image::new(ctx, "/shieldv2.png").unwrap(),
-
         }
     }
 }
 
+#[derive(Serialize, Deserialize)]
 struct Bullet {
     possession: Possession,
     angle: f32,
-    pos: mint::Point2<f32>,
+    pos: Point,
     hit: bool,
     bullet_type: BulletType
 
 }
 
+#[derive(Serialize, Deserialize)]
 enum BulletType {
     Normal,
     Special,
@@ -70,8 +80,8 @@ enum BulletType {
 
 
 impl Bullet {
-    fn new(possession: Possession, angle: f32, pos: mint::Point2<f32>, bullet_type: BulletType) -> Bullet {
-        let new_pos = mint::Point2{
+    fn new(possession: Possession, angle: f32, pos: Point, bullet_type: BulletType) -> Bullet {
+        let new_pos = Point{
             x: pos.x, 
             // the adjustments on y make is so the bullets don't
             // appear on the ship itself
@@ -97,7 +107,7 @@ impl Bullet {
         };
 
         let drawparams = graphics::DrawParam::new()
-            .dest(self.pos)
+            .dest(mint::Point2{ x: self.pos.x, y: self.pos.y })
             .offset(mint::Point2{ x:0.5, y:0.5 });
 
         graphics::draw(ctx,img,drawparams)
@@ -119,10 +129,11 @@ impl Bullet {
     }
 }
 
+#[derive(Serialize, Deserialize)]
 struct Ship {
     health: f32,
     ship_type: Possession,
-    pos: mint::Point2<f32>,
+    pos: Point,
     angle: f32,
     direction: Option<f32>,
     shield: bool
@@ -135,7 +146,7 @@ impl Ship {
                 Ship {
                     health: 1.0,
                     ship_type: ship_type,
-                    pos: mint::Point2{ x:400.0, y:500.0 },
+                    pos: Point{ x:400.0, y:500.0 },
                     angle: 0.0,
                     direction: None,
                     shield: false,
@@ -145,7 +156,7 @@ impl Ship {
                 Ship {
                     health: BOSS_HEALTH,
                     ship_type: ship_type,
-                    pos: mint::Point2{ x:400.0, y:50.0 },
+                    pos: Point{ x:400.0, y:50.0 },
                     angle: consts::PI,
                     direction: Some(1.0),
                     shield: false,
@@ -181,7 +192,7 @@ impl Ship {
         };
 
         let drawparams = graphics::DrawParam::new()
-            .dest(self.pos)
+            .dest(mint::Point2{ x: self.pos.x, y: self.pos.y })
             .rotation(self.angle)
             .offset(mint::Point2{ x:0.5, y:0.5 })
             .scale(mint::Vector2{x: 2.0, y: 2.0});
@@ -220,6 +231,7 @@ impl Ship {
     }
 }
 
+#[derive(Serialize, Deserialize)]
 struct InputState {
     up: bool,
     down: bool,
@@ -245,14 +257,14 @@ impl InputState {
 }
 
 
-#[derive(Copy,Clone)]
+#[derive(Serialize, Deserialize, Copy, Clone)]
 enum Possession {
     Player,
     Enemy,
 }
 
 
-fn main() -> GameResult{
+fn main() -> GameResult {
     let resource_dir = if let Ok(manifest_dir) = env::var("CARGO_MANIFEST_DIR") {
         let mut path = path::PathBuf::from(manifest_dir);
         path.push("resources");
@@ -273,10 +285,11 @@ fn main() -> GameResult{
     event::run(ctx, event_loop, &mut my_game)
 }
 
-fn distance_2d(p1: mint::Point2<f32>, p2: mint::Point2<f32>) -> f32{
+fn distance_2d(p1: Point, p2: Point) -> f32{
     (((p1.x-p2.x).powf(2.0)) + ((p1.y-p2.y).powf(2.0))).sqrt()
 }
 
+#[derive(Serialize, Deserialize,)]
 enum State {
     Playing,
     Won,
