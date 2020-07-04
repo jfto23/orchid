@@ -294,6 +294,7 @@ enum State {
     Playing,
     Won,
     Lost,
+    Loading,
 }
 
 struct MainState {
@@ -307,7 +308,8 @@ struct MainState {
     special_timer: f32,
     shield_timer: f32,
     shield_active: f32,
-    state: State
+    state: State,
+    other_players: Vec<Ship>,
 }
 
 impl MainState {
@@ -323,7 +325,8 @@ impl MainState {
             special_timer: 0.0,
             shield_timer: 0.0,
             shield_active: 0.0,
-            state: State::Playing,
+            state: State::Loading,
+            other_players: Vec::<Ship>::new(),
         }
     }
 
@@ -371,7 +374,7 @@ impl MainState {
             self.special_timer = 0.0;
             self.shield_timer = 0.0;
             self.shield_active = 0.0;
-            self.state = State::Playing;
+            self.state = State::Loading;
     }
 
 
@@ -468,6 +471,7 @@ impl EventHandler for MainState {
 
         if now >= self.enemy_fire_delay {
             match self.state {
+                State::Loading => {},
                 State::Won => {},
                 _ => {
                     self.bullets.push(self.enemy_ship.shoot(Some(consts::PI/4.0), BulletType::Normal));
@@ -546,6 +550,17 @@ impl EventHandler for MainState {
                     KeyCode::Space => self.input_state.fire = true,
                     KeyCode::J => self.input_state.special = true,
                     KeyCode::K => self.input_state.shield = true,
+
+                    _ => {},
+                }
+
+                match key {
+                    KeyCode::W | KeyCode::S | KeyCode::A | KeyCode::D | KeyCode::Space | KeyCode::J | KeyCode::K => {
+                        match self.state {
+                            State::Loading => self.state = State::Playing,
+                            _ => {},
+                        }
+                    }
 
                     _ => {},
                 }
