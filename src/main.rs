@@ -35,6 +35,7 @@ const BOSS_HEALTH: f32 = 100.0;
 enum Wrapper {
     BulletWrapper(Bullet),
     ShipWrapper(Ship),
+    BulletsWrapper(Vec<Bullet>),
 }
 
 #[derive(Serialize, Deserialize, Copy, Clone, Debug)]
@@ -76,7 +77,7 @@ impl Assets {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone)]
 struct Bullet {
     possession: Possession,
     angle: f32,
@@ -86,7 +87,7 @@ struct Bullet {
 
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone)]
 enum BulletType {
     Normal,
     Special,
@@ -143,7 +144,7 @@ impl Bullet {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Copy, Clone)]
 struct Ship {
     health: f32,
     ship_type: Possession,
@@ -532,16 +533,23 @@ impl EventHandler for MainState {
                 State::Loading => {},
                 State::Won => {},
                 _ => {
-                    self.bullets.push(self.enemy_ship.shoot(Some(consts::PI/4.0), BulletType::Normal));
-                    self.bullets.push(self.enemy_ship.shoot(Some(-1.0 * consts::PI/4.0), BulletType::Normal));
-                    self.bullets.push(self.enemy_ship.shoot(None, BulletType::Normal));
+                    match self.network_type {
+                        Network::Server(_) => {
+                            self.bullets.push(self.enemy_ship.shoot(Some(consts::PI/4.0), BulletType::Normal));
+                            self.bullets.push(self.enemy_ship.shoot(Some(-1.0 * consts::PI/4.0), BulletType::Normal));
+                            self.bullets.push(self.enemy_ship.shoot(None, BulletType::Normal));
 
-                    let rand_angle = rand::thread_rng().gen_range(-1.0 * consts::PI/4.0, consts::PI/4.0);
-                    self.bullets.push(self.enemy_ship.shoot(Some(rand_angle), BulletType::Normal));
+                            let rand_angle = rand::thread_rng().gen_range(-1.0 * consts::PI/4.0, consts::PI/4.0);
+                            self.bullets.push(self.enemy_ship.shoot(Some(rand_angle), BulletType::Normal));
 
-                    if self.enemy_ship.health < BOSS_HEALTH/2.0 {
-                        let rand_angle2 = rand::thread_rng().gen_range(-1.0 * consts::PI/4.0, consts::PI/4.0);
-                        self.bullets.push(self.enemy_ship.shoot(Some(rand_angle2), BulletType::Normal));
+                            if self.enemy_ship.health < BOSS_HEALTH/2.0 {
+                                let rand_angle2 = rand::thread_rng().gen_range(-1.0 * consts::PI/4.0, consts::PI/4.0);
+                                self.bullets.push(self.enemy_ship.shoot(Some(rand_angle2), BulletType::Normal));
+
+                            }
+
+                        },
+                        _ => {}
 
                     }
                 }
@@ -561,25 +569,51 @@ impl EventHandler for MainState {
             self.state = State::Won;
         }
 
-        // =============
-        // network stuff
-        // =============
+        // ==================================
+        //          NETWORKING
+        // ==================================
         
         
         match &self.network_type {
             Network::Client(socket, target) => {
-            
-            },
-            Network::Server(socket) => {
-            
-                let mut buf =[0; 32];
-                //println!("{:?}", socket);
-
+                let mut buf =[0; 1024];
                 let result = socket.recv_from(&mut buf);
 
                 match result {
                     Ok(_) => {
-                        println!("GOT IT");
+                        let decoded: Wrapper = bincode::deserialize(&buf).unwrap();
+
+                        match decoded {
+                            Wrapper::BulletsWrapper(bullets) => {
+                                self.bullets = bullets;
+                            }
+                            Wrapper::ShipWrapper(ship) => {
+                                match ship.ship_type {
+                                    Possession::Enemy => {
+                                        self.enemy_ship = ship;
+                                    },
+                                    Possession::Player => {}
+                                }
+                            }
+                            _ => {},
+
+                        }
+                    
+                    },
+                    Err(e) => {},
+                }
+
+                // update pos to server
+
+                // dummy data so server updates
+            },
+            Network::Server(socket) => {
+            
+                let mut buf =[0; 32];
+                let result = socket.recv_from(&mut buf);
+
+                match result {
+                    Ok((_, src)) => {
                         let decoded: Wrapper = bincode::deserialize(&buf).unwrap();
 
                         match decoded {
@@ -587,15 +621,23 @@ impl EventHandler for MainState {
                                 println!("{:?}", bullet);
                                 self.bullets.push(bullet);
                             },
-                            Wrapper::ShipWrapper(ship) => {},
+                            _ => {},
+
                         }
+
+                        // send enemy ship to clients
+                        let  encoded_enemy: Vec<u8> = bincode::serialize(&Wrapper::ShipWrapper(self.enemy_ship.clone())).unwrap();
+                        socket.send_to(&encoded_enemy, src).expect("couldn't update enemy from server");
+
+                        // send back to client the updated bullets
+                        let encoded_bullets: Vec<u8> = bincode::serialize(&Wrapper::BulletsWrapper(self.bullets.clone())).unwrap();
+                        socket.send_to(&encoded_bullets, src).expect("couldn't update bullets from server");
+
                     
                     },
 
                     Err(e) => {},
-
                 }
-
             },
 
         }
