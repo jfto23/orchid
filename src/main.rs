@@ -29,11 +29,25 @@ const SHIELD_COOLDOWN: f32 = 15.0;
 const SHIELD_DURATION: f32 = 2.0;
 const BOSS_HEALTH: f32 = 100.0;
 
-#[derive(Serialize, Deserialize, Copy, Clone)]
+// defines a wrapper that can be safely sent through UDP
+// Contains data that is shared between client/server
+#[derive(Serialize, Deserialize)]
+enum Wrapper {
+    BulletWrapper(Bullet),
+    ShipWrapper(Ship),
+}
+
+#[derive(Serialize, Deserialize, Copy, Clone, Debug)]
 // define own point to encode it
 struct Point {
     x: f32,
     y: f32,
+}
+
+
+enum Network {
+    Client(UdpSocket, SocketAddrV4),
+    Server(UdpSocket),
 }
 
 struct Assets {
@@ -62,7 +76,7 @@ impl Assets {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 struct Bullet {
     possession: Possession,
     angle: f32,
@@ -72,7 +86,7 @@ struct Bullet {
 
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 enum BulletType {
     Normal,
     Special,
@@ -257,7 +271,7 @@ impl InputState {
 }
 
 
-#[derive(Serialize, Deserialize, Copy, Clone)]
+#[derive(Serialize, Deserialize, Copy, Clone, Debug)]
 enum Possession {
     Player,
     Enemy,
@@ -270,8 +284,9 @@ fn main() -> GameResult {
         path.push("resources");
         path
     }
+    // running from /target/debug
     else {
-        path::PathBuf::from("./resources")
+        path::PathBuf::from("../../resources")
     };
 
     let cb = ContextBuilder::new("Orchid", "jfto23")
@@ -280,7 +295,30 @@ fn main() -> GameResult {
 
     let (ctx, event_loop) = &mut cb.build().expect("failed to build");
  
-    let mut my_game = MainState::new(ctx);
+
+    // networking
+
+    let args: Vec<String> = env::args().collect();
+
+    let network_type = match env::args().len() {
+        1 => {
+            let socket = UdpSocket::bind("192.168.0.8:7777").expect("can't bind to local comptuter");
+            socket.set_nonblocking(true).expect("couldn't set to non-blocking");
+
+            Network::Server(socket)
+        }
+        _ => {
+            let socket = UdpSocket::bind("127.0.0.1:7778").expect("can't bind to local comptuter");
+            socket.set_nonblocking(true).expect("couldn't set to non-blocking");
+
+            let target = args[1].clone().parse().expect("Invalid IPV4 adress");
+
+            Network::Client(socket, target)
+        }
+    };
+
+
+    let mut my_game = MainState::new(ctx, network_type);
 
     event::run(ctx, event_loop, &mut my_game)
 }
@@ -310,10 +348,11 @@ struct MainState {
     shield_active: f32,
     state: State,
     other_players: Vec<Ship>,
+    network_type: Network,
 }
 
 impl MainState {
-    pub fn new(ctx: &mut Context) -> MainState {
+    pub fn new(ctx: &mut Context, network_type: Network) -> MainState {
         MainState {
             player_ship: Ship::new(Possession::Player),
             enemy_ship: Ship::new(Possession::Enemy),
@@ -327,6 +366,7 @@ impl MainState {
             shield_active: 0.0,
             state: State::Loading,
             other_players: Vec::<Ship>::new(),
+            network_type: network_type,
         }
     }
 
@@ -440,7 +480,24 @@ impl EventHandler for MainState {
 
         if now >= self.player_fire_delay && self.input_state.fire {
             match self.state {
-                State::Playing => self.bullets.push(self.player_ship.shoot(None, BulletType::Normal)),
+                State::Playing => {
+                    let bullet = self.player_ship.shoot(None, BulletType::Normal);
+
+                    match &self.network_type {
+                        Network::Server(_) => {
+                            println!("{:?}", bullet);
+                            self.bullets.push(bullet)
+                        },
+                        Network::Client(socket, target) => {
+                            println!("SENT IT");
+                            println!("{:?}", socket);
+                            println!("{:?}", target);
+
+                            let encoded_bullet = bincode::serialize(&Wrapper::BulletWrapper(bullet)).unwrap();
+                            socket.send_to(&encoded_bullet, target).expect("couldn't send bullet");
+                        }
+                    }
+                },
                 _ => {}
             }
 
@@ -449,7 +506,8 @@ impl EventHandler for MainState {
 
         self.special_timer -= dt;
         if self.input_state.special && self.special_timer < 0.0 {
-            self.bullets.push(self.player_ship.shoot(None, BulletType::Special));
+            let special_bullet = self.player_ship.shoot(None, BulletType::Special);
+            self.bullets.push(special_bullet);
             self.special_timer = SPECIAL_BULLET_COOLDOWN;
         }
 
@@ -501,6 +559,45 @@ impl EventHandler for MainState {
         }
         else if self.enemy_ship.health < 0.0 {
             self.state = State::Won;
+        }
+
+        // =============
+        // network stuff
+        // =============
+        
+        
+        match &self.network_type {
+            Network::Client(socket, target) => {
+            
+            },
+            Network::Server(socket) => {
+            
+                let mut buf =[0; 32];
+                //println!("{:?}", socket);
+
+                let result = socket.recv_from(&mut buf);
+
+                match result {
+                    Ok(_) => {
+                        println!("GOT IT");
+                        let decoded: Wrapper = bincode::deserialize(&buf).unwrap();
+
+                        match decoded {
+                            Wrapper::BulletWrapper(bullet) => {
+                                println!("{:?}", bullet);
+                                self.bullets.push(bullet);
+                            },
+                            Wrapper::ShipWrapper(ship) => {},
+                        }
+                    
+                    },
+
+                    Err(e) => {},
+
+                }
+
+            },
+
         }
 
         Ok(())
