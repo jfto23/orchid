@@ -8,11 +8,13 @@ use mint;
 
 use rand::Rng;
 
+use uuid::Uuid;
+
 use std::env;
 use std::path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::f32::consts;
-use std::net::{UdpSocket, SocketAddrV4};
+use std::net::{UdpSocket, SocketAddrV4, SocketAddr};
 
 const SHIP_SPEED: f32 = 350.0;
 const BOSS_SPEED: f32 = 125.0;
@@ -35,7 +37,8 @@ const BOSS_HEALTH: f32 = 100.0;
 enum Wrapper {
     BulletWrapper(Bullet),
     ShipWrapper(Ship),
-    BulletsWrapper(Vec<Bullet>),
+    AddressWrapper(SocketAddr),
+    AddressesWrapper(Vec<SocketAddr>),
 }
 
 #[derive(Serialize, Deserialize, Copy, Clone, Debug)]
@@ -47,8 +50,8 @@ struct Point {
 
 
 enum Network {
-    Client(UdpSocket, SocketAddrV4),
-    Server(UdpSocket),
+    Host,
+    Peer,
 }
 
 struct Assets {
@@ -151,7 +154,8 @@ struct Ship {
     pos: Point,
     angle: f32,
     direction: Option<f32>,
-    shield: bool
+    shield: bool,
+    id: Uuid,
 }
 
 impl Ship {
@@ -165,6 +169,7 @@ impl Ship {
                     angle: 0.0,
                     direction: None,
                     shield: false,
+                    id: Uuid::new_v4(),
                 }
             }
             Possession::Enemy => {
@@ -175,6 +180,7 @@ impl Ship {
                     angle: consts::PI,
                     direction: Some(1.0),
                     shield: false,
+                    id: Uuid::new_v4(),
                 }
             }
         }
@@ -301,25 +307,29 @@ fn main() -> GameResult {
 
     let args: Vec<String> = env::args().collect();
 
-    let network_type = match env::args().len() {
+    let (socket, network_type) = match env::args().len() {
         1 => {
             let socket = UdpSocket::bind("192.168.0.8:7777").expect("can't bind to local comptuter");
             socket.set_nonblocking(true).expect("couldn't set to non-blocking");
 
-            Network::Server(socket)
+            (socket,Network::Host)
         }
         _ => {
             let socket = UdpSocket::bind("127.0.0.1:7778").expect("can't bind to local comptuter");
             socket.set_nonblocking(true).expect("couldn't set to non-blocking");
 
-            let target = args[1].clone().parse().expect("Invalid IPV4 adress");
+            let host_addr: SocketAddrV4 = args[1].clone().parse().expect("Invalid IPV4 adress");
 
-            Network::Client(socket, target)
+            // notify host that a connection occured
+            socket.send_to(&[1], host_addr).expect("couldn't connect to host");
+
+
+            (socket,Network::Peer)
         }
     };
 
 
-    let mut my_game = MainState::new(ctx, network_type);
+    let mut my_game = MainState::new(ctx, network_type, socket);
 
     event::run(ctx, event_loop, &mut my_game)
 }
@@ -348,12 +358,14 @@ struct MainState {
     shield_timer: f32,
     shield_active: f32,
     state: State,
-    other_players: Vec<Ship>,
+    other_players: Vec::<Ship>,
     network_type: Network,
+    socket: UdpSocket,
+    peers: Vec<SocketAddr>,
 }
 
 impl MainState {
-    pub fn new(ctx: &mut Context, network_type: Network) -> MainState {
+    pub fn new(ctx: &mut Context, network_type: Network, socket: UdpSocket) -> MainState {
         MainState {
             player_ship: Ship::new(Possession::Player),
             enemy_ship: Ship::new(Possession::Enemy),
@@ -368,6 +380,8 @@ impl MainState {
             state: State::Loading,
             other_players: Vec::<Ship>::new(),
             network_type: network_type,
+            socket: socket,
+            peers: Vec::<SocketAddr>::new(),
         }
     }
 
@@ -483,17 +497,20 @@ impl EventHandler for MainState {
             match self.state {
                 State::Playing => {
                     let bullet = self.player_ship.shoot(None, BulletType::Normal);
+                    self.bullets.push(bullet);
 
-                    match &self.network_type {
-                        Network::Server(_) => {
-                            println!("{:?}", bullet);
-                            self.bullets.push(bullet)
-                        },
-                        Network::Client(socket, target) => {
-                            let encoded_bullet = bincode::serialize(&Wrapper::BulletWrapper(bullet)).unwrap();
-                            socket.send_to(&encoded_bullet, target).expect("couldn't send bullet");
-                        }
+                    // ==================
+                    // SEND TO PEERS
+                    // ==================
+
+                    
+                    /*
+                    for peer in self.peers.iter() {
+                        match self.network
                     }
+                    */
+
+                    
                 },
                 _ => {}
             }
@@ -504,15 +521,8 @@ impl EventHandler for MainState {
         self.special_timer -= dt;
         if self.input_state.special && self.special_timer < 0.0 {
             let special_bullet = self.player_ship.shoot(None, BulletType::Special);
+            self.bullets.push(special_bullet);
 
-            match &self.network_type {
-                Network::Server(_) => self.bullets.push(special_bullet),
-                Network::Client(socket, target) => {
-                    let encoded_special = bincode::serialize(&Wrapper::BulletWrapper(special_bullet)).unwrap();
-                    socket.send_to(&encoded_special, target).expect("couldn't send bullet");
-                }
-
-            }
             self.special_timer = SPECIAL_BULLET_COOLDOWN;
         }
 
@@ -537,23 +547,16 @@ impl EventHandler for MainState {
                 State::Loading => {},
                 State::Won => {},
                 _ => {
-                    match self.network_type {
-                        Network::Server(_) => {
-                            self.bullets.push(self.enemy_ship.shoot(Some(consts::PI/4.0), BulletType::Normal));
-                            self.bullets.push(self.enemy_ship.shoot(Some(-1.0 * consts::PI/4.0), BulletType::Normal));
-                            self.bullets.push(self.enemy_ship.shoot(None, BulletType::Normal));
+                    self.bullets.push(self.enemy_ship.shoot(Some(consts::PI/4.0), BulletType::Normal));
+                    self.bullets.push(self.enemy_ship.shoot(Some(-1.0 * consts::PI/4.0), BulletType::Normal));
+                    self.bullets.push(self.enemy_ship.shoot(None, BulletType::Normal));
 
-                            let rand_angle = rand::thread_rng().gen_range(-1.0 * consts::PI/4.0, consts::PI/4.0);
-                            self.bullets.push(self.enemy_ship.shoot(Some(rand_angle), BulletType::Normal));
+                    let rand_angle = rand::thread_rng().gen_range(-1.0 * consts::PI/4.0, consts::PI/4.0);
+                    self.bullets.push(self.enemy_ship.shoot(Some(rand_angle), BulletType::Normal));
 
-                            if self.enemy_ship.health < BOSS_HEALTH/2.0 {
-                                let rand_angle2 = rand::thread_rng().gen_range(-1.0 * consts::PI/4.0, consts::PI/4.0);
-                                self.bullets.push(self.enemy_ship.shoot(Some(rand_angle2), BulletType::Normal));
-
-                            }
-
-                        },
-                        _ => {}
+                    if self.enemy_ship.health < BOSS_HEALTH/2.0 {
+                        let rand_angle2 = rand::thread_rng().gen_range(-1.0 * consts::PI/4.0, consts::PI/4.0);
+                        self.bullets.push(self.enemy_ship.shoot(Some(rand_angle2), BulletType::Normal));
 
                     }
                 }
@@ -574,78 +577,109 @@ impl EventHandler for MainState {
         }
 
         // ==================================
-        //          NETWORKING
+        //         NETWORKING (MESS)
         // ==================================
-        
-        
-        match &self.network_type {
-            Network::Client(socket, target) => {
-                let mut buf =[0; 1024];
-                let result = socket.recv_from(&mut buf);
 
-                match result {
-                    Ok(_) => {
-                        let decoded: Wrapper = bincode::deserialize(&buf).unwrap();
+        match self.state {
 
-                        match decoded {
-                            Wrapper::BulletsWrapper(bullets) => {
-                                self.bullets = bullets;
-                            }
-                            Wrapper::ShipWrapper(ship) => {
-                                match ship.ship_type {
-                                    Possession::Enemy => {
-                                        self.enemy_ship = ship;
-                                    },
-                                    Possession::Player => {}
+            // ===========================================
+            //     HANDLING CONNECTION DURING LOADING
+            // ===========================================
+            State::Loading => {
+                match self.network_type {
+                    Network::Host => {
+                        let mut buf = [0u8; 1024];
+                        let result = self.socket.recv_from(&mut buf);
+
+                        match result {
+                            // some "client" connected to host
+                            Ok((_amt, src)) => {
+
+                                self.peers.push(src);
+                                // send new peer address to all peers except the new one
+                                let encoded_address = bincode::serialize(&Wrapper::AddressWrapper(src)).unwrap();
+                                for peer in self.peers.iter() {
+                                    if *peer == src {
+                                        for e in self.peers.clone().iter() {
+                                            if *e == src {
+                                                continue;
+                                            }
+                                            let encoded_e = bincode::serialize(&Wrapper::AddressWrapper(*e)).unwrap();
+                                            self.socket.send_to(&encoded_e, src).expect("couldn't update peer list to peers");
+                                        }
+                                        let encoded_host = bincode::serialize(&Wrapper::AddressWrapper(self.socket.local_addr().unwrap())).unwrap();
+                                        self.socket.send_to(&encoded_host, src).expect("couldn't update peer list to peers");
+                                        continue;
+                                    }
+                                    self.socket.send_to(&encoded_address, peer).expect("couldn't update peer list to peers");
                                 }
-                            }
-                            _ => {},
+
+                            },
+
+                            Err(_) => {},
+                        }
+                    },
+
+                    Network::Peer => {
+                        let mut buf = [0u8; 1024];
+                        let result = self.socket.recv_from(&mut buf);
+
+                        match result {
+                            Ok((_amt, _src)) => {
+                                let decoded: Wrapper = bincode::deserialize(&buf).unwrap();
+                                match decoded {
+                                    Wrapper::AddressWrapper(address) => {
+                                        self.peers.push(address);
+                                    },
+                                    _ => {}
+                                }
+                            },
+                            Err(_) => {},
 
                         }
                     
-                    },
-                    Err(_) => {},
+                    }
                 }
 
-                // update pos to server
-
-                // dummy data so server updates
             },
-            Network::Server(socket) => {
-            
-                let mut buf =[0; 32];
-                let result = socket.recv_from(&mut buf);
 
+            _ => {
+
+                // =======================
+                // RECEIVE FROM PEERS
+                // =======================
+                
+                let mut buf = [0u8; 1024];
+                let result = self.socket.recv_from(&mut buf);
                 match result {
-                    Ok((_, src)) => {
+                    Ok((_amt, _src)) => {
                         let decoded: Wrapper = bincode::deserialize(&buf).unwrap();
 
                         match decoded {
+                            Wrapper::ShipWrapper(updated_ship) => {
+                                let index = self.other_players.iter().position(|&x| x.id == updated_ship.id).unwrap();
+                                self.other_players[index] = updated_ship;
+                            },
                             Wrapper::BulletWrapper(bullet) => {
-                                println!("{:?}", bullet);
                                 self.bullets.push(bullet);
                             },
-                            _ => {},
-
+                            _ => {}
                         }
-
-                        // send enemy ship to clients
-                        let  encoded_enemy: Vec<u8> = bincode::serialize(&Wrapper::ShipWrapper(self.enemy_ship.clone())).unwrap();
-                        socket.send_to(&encoded_enemy, src).expect("couldn't update enemy from server");
-
-                        // send back to client the updated bullets
-                        let encoded_bullets: Vec<u8> = bincode::serialize(&Wrapper::BulletsWrapper(self.bullets.clone())).unwrap();
-                        socket.send_to(&encoded_bullets, src).expect("couldn't update bullets from server");
-
                     
                     },
 
                     Err(_) => {},
+
                 }
+
+            
             },
 
         }
 
+        println!("{:?}", self.peers);
+        
+        
         Ok(())
     }
 
