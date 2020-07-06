@@ -380,7 +380,7 @@ impl MainState {
 
             match bullet.possession {
                 Possession::Enemy => {
-                    if player_distance < 24.0 {
+                    if player_distance < 24.0 && self.player_ship.health > 0.0 {
                         if !self.player_ship.shield && self.enemy_ship.health > 0.0 {
                             self.player_ship.health -= 2.0;
                         }
@@ -490,10 +490,6 @@ impl EventHandler for MainState {
                             self.bullets.push(bullet)
                         },
                         Network::Client(socket, target) => {
-                            println!("SENT IT");
-                            println!("{:?}", socket);
-                            println!("{:?}", target);
-
                             let encoded_bullet = bincode::serialize(&Wrapper::BulletWrapper(bullet)).unwrap();
                             socket.send_to(&encoded_bullet, target).expect("couldn't send bullet");
                         }
@@ -508,7 +504,15 @@ impl EventHandler for MainState {
         self.special_timer -= dt;
         if self.input_state.special && self.special_timer < 0.0 {
             let special_bullet = self.player_ship.shoot(None, BulletType::Special);
-            self.bullets.push(special_bullet);
+
+            match &self.network_type {
+                Network::Server(_) => self.bullets.push(special_bullet),
+                Network::Client(socket, target) => {
+                    let encoded_special = bincode::serialize(&Wrapper::BulletWrapper(special_bullet)).unwrap();
+                    socket.send_to(&encoded_special, target).expect("couldn't send bullet");
+                }
+
+            }
             self.special_timer = SPECIAL_BULLET_COOLDOWN;
         }
 
@@ -600,7 +604,7 @@ impl EventHandler for MainState {
                         }
                     
                     },
-                    Err(e) => {},
+                    Err(_) => {},
                 }
 
                 // update pos to server
@@ -636,7 +640,7 @@ impl EventHandler for MainState {
                     
                     },
 
-                    Err(e) => {},
+                    Err(_) => {},
                 }
             },
 
