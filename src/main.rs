@@ -30,7 +30,7 @@ const SCREEN_BORDER: f32 = 20.0;
 const SHIELD_COOLDOWN: f32 = 15.0;
 const SHIELD_DURATION: f32 = 2.0;
 const BOSS_HEALTH: f32 = 100.0;
-const BROADCAST_TICK: f32 = 60.0;
+const BROADCAST_TICK: f32 = 1.0/60.0;
 
 // defines a wrapper that can be safely sent through UDP
 // Contains data that is shared between peers
@@ -391,7 +391,7 @@ impl MainState {
             network_type: network_type,
             socket: socket,
             peers: Vec::<SocketAddr>::new(),
-            broadcast_timer: 0.0
+            broadcast_timer: BROADCAST_TICK,
         }
     }
 
@@ -480,14 +480,17 @@ impl EventHandler for MainState {
     fn update(&mut self, ctx: &mut Context) -> GameResult<()> {
         let dt = ggez::timer::duration_to_f64(ggez::timer::delta(ctx)) as f32;
 
+        self.broadcast_timer -= dt;
+
         let (width, height) = graphics::drawable_size(ctx);
 
         let moved = self.player_ship.update_pos(dt, &self.input_state, width, height);
-        if moved {
+        if moved && self.broadcast_timer < 0.0 {
             let encoded_ship = bincode::serialize(&Wrapper::ShipWrapper(self.player_ship)).unwrap();
             for peer in self.peers.iter() {
                 self.socket.send_to(&encoded_ship, peer)?;
             }
+            self.broadcast_timer = BROADCAST_TICK;
         }
 
 
