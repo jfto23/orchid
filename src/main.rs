@@ -30,15 +30,17 @@ const SCREEN_BORDER: f32 = 20.0;
 const SHIELD_COOLDOWN: f32 = 15.0;
 const SHIELD_DURATION: f32 = 2.0;
 const BOSS_HEALTH: f32 = 100.0;
+const BROADCAST_TICK: f32 = 60.0;
 
 // defines a wrapper that can be safely sent through UDP
-// Contains data that is shared between client/server
+// Contains data that is shared between peers
 #[derive(Serialize, Deserialize)]
 enum Wrapper {
     BulletWrapper(Bullet),
     ShipWrapper(Ship),
     AddressWrapper(SocketAddr),
     AddressesWrapper(Vec<SocketAddr>),
+    ConnectSignal,
 }
 
 #[derive(Serialize, Deserialize, Copy, Clone, Debug)]
@@ -220,22 +222,27 @@ impl Ship {
         graphics::draw(ctx,img,drawparams)
     }
 
-    fn update_pos(&mut self, dt: f32, input_state: &InputState, width: f32, height: f32) {
+    // returns true if the ship moved, false otherwise
+    fn update_pos(&mut self, dt: f32, input_state: &InputState, width: f32, height: f32) -> bool {
+        let old_x = self.pos.x;
+        let old_y = self.pos.y;
         if self.health < 0.0 {
-            return
+            return false
         }
         if input_state.up && self.pos.y >= SCREEN_BORDER {
-            self.pos.y -= dt *SHIP_SPEED
+            self.pos.y -= dt *SHIP_SPEED;
         }
         if input_state.down && self.pos.y <= height - SCREEN_BORDER {
-            self.pos.y += dt *SHIP_SPEED
+            self.pos.y += dt *SHIP_SPEED;
         }
         if input_state.right && self.pos.x <= width - SCREEN_BORDER {
-            self.pos.x += dt *SHIP_SPEED
+            self.pos.x += dt *SHIP_SPEED;
         }
         if input_state.left && self.pos.x >= SCREEN_BORDER {
-            self.pos.x -= dt *SHIP_SPEED
+            self.pos.x -= dt *SHIP_SPEED;
         }
+
+        self.pos.x != old_x || self.pos.y != old_y
     }
 
     // for boss ship
@@ -304,12 +311,11 @@ fn main() -> GameResult {
  
 
     // networking
-
     let args: Vec<String> = env::args().collect();
 
     let (socket, network_type) = match env::args().len() {
         1 => {
-            let socket = UdpSocket::bind("192.168.0.8:7777").expect("can't bind to local comptuter");
+            let socket = UdpSocket::bind("127.0.0.1:7777").expect("can't bind to local comptuter");
             socket.set_nonblocking(true).expect("couldn't set to non-blocking");
 
             (socket,Network::Host)
@@ -321,7 +327,9 @@ fn main() -> GameResult {
             let host_addr: SocketAddrV4 = args[1].clone().parse().expect("Invalid IPV4 adress");
 
             // notify host that a connection occured
-            socket.send_to(&[1], host_addr).expect("couldn't connect to host");
+
+            let signal = bincode::serialize(&Wrapper::ConnectSignal).unwrap();
+            socket.send_to(&signal, host_addr).expect("couldn't connect to host");
 
 
             (socket,Network::Peer)
@@ -362,6 +370,7 @@ struct MainState {
     network_type: Network,
     socket: UdpSocket,
     peers: Vec<SocketAddr>,
+    broadcast_timer: f32,
 }
 
 impl MainState {
@@ -382,6 +391,7 @@ impl MainState {
             network_type: network_type,
             socket: socket,
             peers: Vec::<SocketAddr>::new(),
+            broadcast_timer: 0.0
         }
     }
 
@@ -472,7 +482,16 @@ impl EventHandler for MainState {
 
         let (width, height) = graphics::drawable_size(ctx);
 
-        self.player_ship.update_pos(dt, &self.input_state, width, height);
+        let moved = self.player_ship.update_pos(dt, &self.input_state, width, height);
+        if moved {
+            let encoded_ship = bincode::serialize(&Wrapper::ShipWrapper(self.player_ship)).unwrap();
+            for peer in self.peers.iter() {
+                self.socket.send_to(&encoded_ship, peer)?;
+            }
+        }
+
+
+        
 
         if let State::Playing | State::Lost = self.state {
             self.enemy_ship.oscillate(dt, width);
@@ -499,16 +518,11 @@ impl EventHandler for MainState {
                     let bullet = self.player_ship.shoot(None, BulletType::Normal);
                     self.bullets.push(bullet);
 
-                    // ==================
-                    // SEND TO PEERS
-                    // ==================
-
-                    
-                    /*
+                    // send bullet to all peers
+                    let encoded_bullet = bincode::serialize(&Wrapper::BulletWrapper(bullet)).unwrap();
                     for peer in self.peers.iter() {
-                        match self.network
+                        self.socket.send_to(&encoded_bullet, peer)?;
                     }
-                    */
 
                     
                 },
@@ -547,6 +561,7 @@ impl EventHandler for MainState {
                 State::Loading => {},
                 State::Won => {},
                 _ => {
+                    /*
                     self.bullets.push(self.enemy_ship.shoot(Some(consts::PI/4.0), BulletType::Normal));
                     self.bullets.push(self.enemy_ship.shoot(Some(-1.0 * consts::PI/4.0), BulletType::Normal));
                     self.bullets.push(self.enemy_ship.shoot(None, BulletType::Normal));
@@ -559,6 +574,7 @@ impl EventHandler for MainState {
                         self.bullets.push(self.enemy_ship.shoot(Some(rand_angle2), BulletType::Normal));
 
                     }
+                    */
                 }
 
             }
@@ -575,6 +591,7 @@ impl EventHandler for MainState {
         else if self.enemy_ship.health < 0.0 {
             self.state = State::Won;
         }
+
 
         // ==================================
         //         NETWORKING (MESS)
@@ -594,25 +611,28 @@ impl EventHandler for MainState {
                         match result {
                             // some "client" connected to host
                             Ok((_amt, src)) => {
-
-                                self.peers.push(src);
-                                // send new peer address to all peers except the new one
-                                let encoded_address = bincode::serialize(&Wrapper::AddressWrapper(src)).unwrap();
-                                for peer in self.peers.iter() {
-                                    if *peer == src {
-                                        for e in self.peers.clone().iter() {
-                                            if *e == src {
-                                                continue;
+                                let decoded: Wrapper = bincode::deserialize(&buf).unwrap();
+                                if let Wrapper::ConnectSignal = decoded {
+                                    self.peers.push(src);
+                                    // send new peer address to all peers except the new one
+                                    let encoded_address = bincode::serialize(&Wrapper::AddressWrapper(src)).unwrap();
+                                    for peer in self.peers.iter() {
+                                        if *peer == src {
+                                            for e in self.peers.clone().iter() {
+                                                if *e == src {
+                                                    continue;
+                                                }
+                                                let encoded_e = bincode::serialize(&Wrapper::AddressWrapper(*e)).unwrap();
+                                                self.socket.send_to(&encoded_e, src)?;
                                             }
-                                            let encoded_e = bincode::serialize(&Wrapper::AddressWrapper(*e)).unwrap();
-                                            self.socket.send_to(&encoded_e, src).expect("couldn't update peer list to peers");
+                                            let encoded_host = bincode::serialize(&Wrapper::AddressWrapper(self.socket.local_addr().unwrap())).unwrap();
+                                            self.socket.send_to(&encoded_host, src)?;
+                                            continue;
                                         }
-                                        let encoded_host = bincode::serialize(&Wrapper::AddressWrapper(self.socket.local_addr().unwrap())).unwrap();
-                                        self.socket.send_to(&encoded_host, src).expect("couldn't update peer list to peers");
-                                        continue;
+                                        self.socket.send_to(&encoded_address, peer)?;
                                     }
-                                    self.socket.send_to(&encoded_address, peer).expect("couldn't update peer list to peers");
                                 }
+
 
                             },
 
@@ -649,7 +669,7 @@ impl EventHandler for MainState {
                 // RECEIVE FROM PEERS
                 // =======================
                 
-                let mut buf = [0u8; 1024];
+                let mut buf = [0u8; 128];
                 let result = self.socket.recv_from(&mut buf);
                 match result {
                     Ok((_amt, _src)) => {
@@ -657,10 +677,15 @@ impl EventHandler for MainState {
 
                         match decoded {
                             Wrapper::ShipWrapper(updated_ship) => {
-                                let index = self.other_players.iter().position(|&x| x.id == updated_ship.id).unwrap();
-                                self.other_players[index] = updated_ship;
+                                println!("got ship");
+                                let index = self.other_players.iter().position(|&x| x.id == updated_ship.id);
+                                match index {
+                                    Some(i) => self.other_players[i] = updated_ship,
+                                    None => self.other_players.push(updated_ship),
+                                }
                             },
                             Wrapper::BulletWrapper(bullet) => {
+                                println!("got bullet");
                                 self.bullets.push(bullet);
                             },
                             _ => {}
@@ -677,7 +702,6 @@ impl EventHandler for MainState {
 
         }
 
-        println!("{:?}", self.peers);
         
         
         Ok(())
@@ -688,6 +712,10 @@ impl EventHandler for MainState {
 
         self.player_ship.draw(&mut self.assets, ctx)?;
         self.enemy_ship.draw(&mut self.assets, ctx)?;
+
+        for ship in &self.other_players {
+            ship.draw(&mut self.assets, ctx)?;
+        }
 
         for bullet in &self.bullets {
             bullet.draw(&mut self.assets, ctx)?;
