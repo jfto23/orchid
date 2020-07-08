@@ -30,7 +30,7 @@ const SCREEN_BORDER: f32 = 20.0;
 const SHIELD_COOLDOWN: f32 = 15.0;
 const SHIELD_DURATION: f32 = 2.0;
 const BOSS_HEALTH: f32 = 100.0;
-const BROADCAST_TICK: f32 = 1.0/60.0;
+const BROADCAST_TICK: f32 = 1.0/30.0;
 const PLAYER_SPAWN: Point = Point{ x: 400.0, y: 500.0};
 
 // defines a wrapper that can be sent through UDP
@@ -42,17 +42,19 @@ enum Wrapper {
     ShipWrapper(Ship),
     AddressWrapper(SocketAddr),
     AddressesWrapper(Vec<SocketAddr>),
-    ShipMoveWrapper(ShipMove),
+    ShipUpdateWrapper(ShipUpdate),
     ConnectSignal,
     StartSignal,
     RestartSignal,
+    WinSignal,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct ShipMove {
+struct ShipUpdate {
     id: Uuid,
     x: f32,
     y: f32,
+    shield: bool,
 }
 
 #[derive(Serialize, Deserialize, Copy, Clone, Debug)]
@@ -72,6 +74,7 @@ struct Assets {
     player_ship: graphics::Image,
     enemy_ship: graphics::Image,
     player_bullet: graphics::Image,
+    other_players: graphics::Image,
     enemy_bullet: graphics::Image,
     player_dead: graphics::Image,
     special_bullet: graphics::Image,
@@ -82,8 +85,9 @@ struct Assets {
 impl Assets {
     fn new(ctx: &mut Context) -> Assets {
         Assets {
-            player_ship: graphics::Image::new(ctx, "/player_shipv2.png").unwrap(),
+            player_ship: graphics::Image::new(ctx, "/player_shipv1.png").unwrap(),
             enemy_ship: graphics::Image::new(ctx, "/enemy_ship.png").unwrap(),
+            other_players: graphics::Image::new(ctx, "/player_shipv2.png").unwrap(),
             player_bullet: graphics::Image::new(ctx, "/player_bullet2.png").unwrap(),
             enemy_bullet: graphics::Image::new(ctx, "/enemy_bullet.png").unwrap(),
             player_dead: graphics::Image::new(ctx, "/player_ship_dead.png").unwrap(),
@@ -179,7 +183,7 @@ impl Ship {
                 Ship {
                     health: 1.0,
                     ship_type: ship_type,
-                    pos: Point{ x:400.0, y:500.0 },
+                    pos: PLAYER_SPAWN,
                     angle: 0.0,
                     direction: None,
                     shield: false,
@@ -204,7 +208,7 @@ impl Ship {
         match self.ship_type {
             Possession::Player => {
                 self.health = 1.0;
-                self.pos = Point{ x:400.0, y:500.0};
+                self.pos = PLAYER_SPAWN;
                 self.shield = false;
             
             },
@@ -212,6 +216,7 @@ impl Ship {
                 self.health = BOSS_HEALTH;
                 self.pos = Point{ x:400.0, y:50.0};
                 self.shield = false;
+                self.direction = Some(1.0);
             },
 
 
@@ -233,7 +238,7 @@ impl Ship {
         }
     }
 
-    fn draw(&self, assets: &mut Assets, ctx: &mut Context) -> GameResult {
+    fn draw(&self, assets: &mut Assets, ctx: &mut Context, version: Option<i32>) -> GameResult {
 
         let img = match self.ship_type {
             Possession::Player => {
@@ -244,7 +249,12 @@ impl Ship {
                     &assets.shield
                 }
                 else {
-                    &assets.player_ship
+                    if let Some(1) = version {
+                        &assets.player_ship
+                    }
+                    else {
+                        &assets.other_players
+                    }
                 }
             },
             Possession::Enemy => &assets.enemy_ship,
@@ -532,11 +542,10 @@ impl EventHandler for MainState {
         // broadcast_timer limits the amount of time the position of the ship gets broadcasted 
         // to all peers. Without it, lags accumulates over time.
         if moved && self.broadcast_timer < 0.0 {
-            let movement = Wrapper::ShipMoveWrapper(ShipMove{id: self.player_ship.id, x:self.player_ship.pos.x, y:self.player_ship.pos.y});
+            let movement = Wrapper::ShipUpdateWrapper(ShipUpdate {id: self.player_ship.id, x:self.player_ship.pos.x, y:self.player_ship.pos.y, shield: self.player_ship.shield });
             self.send_to_peers(movement);
             self.broadcast_timer = BROADCAST_TICK;
         }
-
 
         if let State::Playing | State::Lost = self.state {
             self.enemy_ship.oscillate(dt, width);
@@ -563,7 +572,6 @@ impl EventHandler for MainState {
                     let bullet = self.player_ship.shoot(None, BulletType::Normal);
                     self.bullets.push(bullet);
 
-                    // send bullet to all peers
                     let msg = Wrapper::BulletWrapper(bullet);
                     self.send_to_peers(msg);
                     
@@ -577,6 +585,10 @@ impl EventHandler for MainState {
         self.special_timer -= dt;
         if self.input_state.special && self.special_timer < 0.0 {
             let special_bullet = self.player_ship.shoot(None, BulletType::Special);
+
+            let msg = Wrapper::BulletWrapper(special_bullet);
+            self.send_to_peers(msg);
+
             self.bullets.push(special_bullet);
 
             self.special_timer = SPECIAL_BULLET_COOLDOWN;
@@ -586,14 +598,19 @@ impl EventHandler for MainState {
         if self.input_state.shield && self.shield_timer < 0.0 {
             self.player_ship.shield = true;
             self.shield_timer = SHIELD_COOLDOWN;
-            self.shield_active = SHIELD_DURATION
+            self.shield_active = SHIELD_DURATION;
+
+            let update = Wrapper::ShipUpdateWrapper(ShipUpdate{id: self.player_ship.id, x:self.player_ship.pos.x, y:self.player_ship.pos.y, shield: true });
+            self.send_to_peers(update);
         }
 
         if self.shield_active > 0.0 {
             self.shield_active -= dt;
         }
-        else {
+        else if self.player_ship.shield {
             self.player_ship.shield = false;
+            let update = Wrapper::ShipUpdateWrapper(ShipUpdate {id: self.player_ship.id, x:self.player_ship.pos.x, y:self.player_ship.pos.y, shield: self.player_ship.shield });
+            self.send_to_peers(update);
         }
 
 
@@ -631,7 +648,15 @@ impl EventHandler for MainState {
             self.state = State::Lost;
         }
         else if self.enemy_ship.health < 0.0 {
-            self.state = State::Won;
+            match self.state {
+                State::Won => {},
+                _ => {
+                    self.state = State::Won;
+                    let msg  = Wrapper::WinSignal;
+                    self.send_to_peers(msg);
+                }
+
+            }
         }
 
         // ==================================
@@ -680,7 +705,6 @@ impl EventHandler for MainState {
                 
                 // this is horrible but it's only during
                 // loading phase
-
                 let msg  = Wrapper::ShipWrapper(self.player_ship);
                 self.send_to_peers(msg);
 
@@ -760,13 +784,14 @@ impl EventHandler for MainState {
                         let decoded: Wrapper = bincode::deserialize(&buf).unwrap();
 
                         match decoded {
-                            Wrapper::ShipMoveWrapper(ship_move) => {
+                            Wrapper::ShipUpdateWrapper(ship_update) => {
                                 //println!("got ship");
-                                let index = self.other_players.iter().position(|&x| x.id == ship_move.id);
+                                let index = self.other_players.iter().position(|&x| x.id == ship_update.id);
                                 match index {
                                     Some(i) => {
-                                        self.other_players[i].pos.x = ship_move.x;
-                                        self.other_players[i].pos.y = ship_move.y;
+                                        self.other_players[i].pos.x = ship_update.x;
+                                        self.other_players[i].pos.y = ship_update.y;
+                                        self.other_players[i].shield = ship_update.shield;
                                     },
                                     None => {},
                                 }
@@ -776,6 +801,7 @@ impl EventHandler for MainState {
                                 self.bullets.push(bullet);
                             },
                             Wrapper::RestartSignal => self.reset(ctx),
+                            Wrapper::WinSignal => self.state = State::Won,
                             _ => {}
                         }
                     
@@ -798,11 +824,11 @@ impl EventHandler for MainState {
     fn draw(&mut self, ctx: &mut Context) -> GameResult<()> {
         graphics::clear(ctx, graphics::BLACK);
 
-        self.player_ship.draw(&mut self.assets, ctx)?;
-        self.enemy_ship.draw(&mut self.assets, ctx)?;
+        self.player_ship.draw(&mut self.assets, ctx, Some(1))?;
+        self.enemy_ship.draw(&mut self.assets, ctx, None)?;
 
         for ship in &self.other_players {
-            ship.draw(&mut self.assets, ctx)?;
+            ship.draw(&mut self.assets, ctx, Some(2))?;
         }
 
         for bullet in &self.bullets {
