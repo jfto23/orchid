@@ -31,16 +31,28 @@ const SHIELD_COOLDOWN: f32 = 15.0;
 const SHIELD_DURATION: f32 = 2.0;
 const BOSS_HEALTH: f32 = 100.0;
 const BROADCAST_TICK: f32 = 1.0/60.0;
+const PLAYER_SPAWN: Point = Point{ x: 400.0, y: 500.0};
 
-// defines a wrapper that can be safely sent through UDP
+// defines a wrapper that can be sent through UDP
 // Contains data that is shared between peers
-#[derive(Serialize, Deserialize)]
+// For simplicity, the bullets and ship are sent as a whole
+#[derive(Serialize, Deserialize, Debug)]
 enum Wrapper {
     BulletWrapper(Bullet),
     ShipWrapper(Ship),
     AddressWrapper(SocketAddr),
     AddressesWrapper(Vec<SocketAddr>),
+    ShipMoveWrapper(ShipMove),
     ConnectSignal,
+    StartSignal,
+    RestartSignal,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct ShipMove {
+    id: Uuid,
+    x: f32,
+    y: f32,
 }
 
 #[derive(Serialize, Deserialize, Copy, Clone, Debug)]
@@ -149,7 +161,7 @@ impl Bullet {
     }
 }
 
-#[derive(Serialize, Deserialize, Copy, Clone)]
+#[derive(Serialize, Deserialize, Copy, Clone, Debug)]
 struct Ship {
     health: f32,
     ship_type: Possession,
@@ -186,6 +198,30 @@ impl Ship {
                 }
             }
         }
+    }
+
+    fn reset(&mut self) {
+        match self.ship_type {
+            Possession::Player => {
+                self.health = 1.0;
+                self.pos = Point{ x:400.0, y:500.0};
+                self.shield = false;
+            
+            },
+            Possession::Enemy => {
+                self.health = BOSS_HEALTH;
+                self.pos = Point{ x:400.0, y:50.0};
+                self.shield = false;
+            },
+
+
+        }
+
+    }
+
+    fn move_to_point(&mut self, p: Point) {
+        self.pos.x = p.x;
+        self.pos.y = p.y;
     }
 
     // the optionnal argument lets ships shoot in more directions
@@ -429,8 +465,8 @@ impl MainState {
 
 
     fn reset(&mut self, ctx: &mut Context) {
-            self.player_ship = Ship::new(Possession::Player);
-            self.enemy_ship = Ship::new(Possession::Enemy);
+            self.player_ship.reset();
+            self.enemy_ship.reset();
             self.bullets = Vec::<Bullet>::new();
             self.assets = Assets::new(ctx);
             self.input_state = InputState::new();
@@ -474,6 +510,13 @@ impl MainState {
         let text = graphics::Text::new(("YOU WON",self.assets.font,16.0));
         graphics::draw(ctx, &text, (mint::Point2{x:350.0,y:100.0}, 0.0, graphics::WHITE)).unwrap();
     }
+
+    fn send_to_peers(&self, msg: Wrapper) {
+        let encoded = bincode::serialize(&msg).unwrap();
+        for peer in self.peers.iter() {
+            self.socket.send_to(&encoded, peer).unwrap();
+        }
+    }
 }
 
 impl EventHandler for MainState {
@@ -485,16 +528,15 @@ impl EventHandler for MainState {
         let (width, height) = graphics::drawable_size(ctx);
 
         let moved = self.player_ship.update_pos(dt, &self.input_state, width, height);
+
+        // broadcast_timer limits the amount of time the position of the ship gets broadcasted 
+        // to all peers. Without it, lags accumulates over time.
         if moved && self.broadcast_timer < 0.0 {
-            let encoded_ship = bincode::serialize(&Wrapper::ShipWrapper(self.player_ship)).unwrap();
-            for peer in self.peers.iter() {
-                self.socket.send_to(&encoded_ship, peer)?;
-            }
+            let movement = Wrapper::ShipMoveWrapper(ShipMove{id: self.player_ship.id, x:self.player_ship.pos.x, y:self.player_ship.pos.y});
+            self.send_to_peers(movement);
             self.broadcast_timer = BROADCAST_TICK;
         }
 
-
-        
 
         if let State::Playing | State::Lost = self.state {
             self.enemy_ship.oscillate(dt, width);
@@ -517,16 +559,13 @@ impl EventHandler for MainState {
 
         if now >= self.player_fire_delay && self.input_state.fire {
             match self.state {
-                State::Playing => {
+                State::Playing | State::Won => {
                     let bullet = self.player_ship.shoot(None, BulletType::Normal);
                     self.bullets.push(bullet);
 
                     // send bullet to all peers
-                    let encoded_bullet = bincode::serialize(&Wrapper::BulletWrapper(bullet)).unwrap();
-                    for peer in self.peers.iter() {
-                        self.socket.send_to(&encoded_bullet, peer)?;
-                    }
-
+                    let msg = Wrapper::BulletWrapper(bullet);
+                    self.send_to_peers(msg);
                     
                 },
                 _ => {}
@@ -595,7 +634,6 @@ impl EventHandler for MainState {
             self.state = State::Won;
         }
 
-
         // ==================================
         //         NETWORKING (MESS)
         // ==================================
@@ -605,35 +643,80 @@ impl EventHandler for MainState {
             // ===========================================
             //     HANDLING CONNECTION DURING LOADING
             // ===========================================
+
             State::Loading => {
+
+                for ship in &mut self.other_players {
+                    ship.move_to_point(PLAYER_SPAWN);
+                }
+
+                // first make all ship appear
+                if self.peers.len() != self.other_players.len() {
+                    
+                    println!("loading all ships...");
+                    let mut buf = [0u8; 512];
+                    let result = self.socket.recv_from(&mut buf);
+
+                    match result {
+                        Ok(_) => {
+                                let decoded: Wrapper = bincode::deserialize(&buf).unwrap();
+                                if let Wrapper::ShipWrapper(ship) = decoded {
+                                    let index = self.other_players
+                                        .iter()
+                                        .position(|&x| x.id == ship.id);
+                                    match index {
+                                        Some(_) => {},
+                                        None => self.other_players.push(ship),
+                                    }
+
+                                }
+                        },
+                        Err(_) => {},
+                    }
+
+
+                }
+
+                
+                // this is horrible but it's only during
+                // loading phase
+
+                let msg  = Wrapper::ShipWrapper(self.player_ship);
+                self.send_to_peers(msg);
+
+                let mut buf = [0u8; 512];
+                let result = self.socket.recv_from(&mut buf);
+
                 match self.network_type {
                     Network::Host => {
-                        let mut buf = [0u8; 1024];
-                        let result = self.socket.recv_from(&mut buf);
-
                         match result {
                             // some "client" connected to host
                             Ok((_amt, src)) => {
                                 let decoded: Wrapper = bincode::deserialize(&buf).unwrap();
-                                if let Wrapper::ConnectSignal = decoded {
-                                    self.peers.push(src);
-                                    // send new peer address to all peers except the new one
-                                    let encoded_address = bincode::serialize(&Wrapper::AddressWrapper(src)).unwrap();
-                                    for peer in self.peers.iter() {
-                                        if *peer == src {
-                                            for e in self.peers.clone().iter() {
-                                                if *e == src {
-                                                    continue;
+                                match decoded {
+                                    Wrapper::ConnectSignal => {
+                                        self.peers.push(src);
+                                        // send new peer address to all peers except the new one
+                                        let encoded_address = bincode::serialize(&Wrapper::AddressWrapper(src)).unwrap();
+                                        for peer in self.peers.iter() {
+                                            if *peer == src {
+                                                for e in self.peers.clone().iter() {
+                                                    if *e == src {
+                                                        continue;
+                                                    }
+                                                    let encoded_e = bincode::serialize(&Wrapper::AddressWrapper(*e)).unwrap();
+                                                    self.socket.send_to(&encoded_e, src)?;
                                                 }
-                                                let encoded_e = bincode::serialize(&Wrapper::AddressWrapper(*e)).unwrap();
-                                                self.socket.send_to(&encoded_e, src)?;
+                                                let encoded_host = bincode::serialize(&Wrapper::AddressWrapper(self.socket.local_addr().unwrap())).unwrap();
+                                                self.socket.send_to(&encoded_host, src)?;
+                                                continue;
                                             }
-                                            let encoded_host = bincode::serialize(&Wrapper::AddressWrapper(self.socket.local_addr().unwrap())).unwrap();
-                                            self.socket.send_to(&encoded_host, src)?;
-                                            continue;
+                                            self.socket.send_to(&encoded_address, peer)?;
                                         }
-                                        self.socket.send_to(&encoded_address, peer)?;
-                                    }
+                                    },
+
+                                    Wrapper::StartSignal => self.state = State::Playing,
+                                    _ => {},
                                 }
 
 
@@ -644,9 +727,6 @@ impl EventHandler for MainState {
                     },
 
                     Network::Peer => {
-                        let mut buf = [0u8; 1024];
-                        let result = self.socket.recv_from(&mut buf);
-
                         match result {
                             Ok((_amt, _src)) => {
                                 let decoded: Wrapper = bincode::deserialize(&buf).unwrap();
@@ -654,6 +734,7 @@ impl EventHandler for MainState {
                                     Wrapper::AddressWrapper(address) => {
                                         self.peers.push(address);
                                     },
+                                    Wrapper::StartSignal => self.state = State::Playing,
                                     _ => {}
                                 }
                             },
@@ -679,18 +760,22 @@ impl EventHandler for MainState {
                         let decoded: Wrapper = bincode::deserialize(&buf).unwrap();
 
                         match decoded {
-                            Wrapper::ShipWrapper(updated_ship) => {
-                                println!("got ship");
-                                let index = self.other_players.iter().position(|&x| x.id == updated_ship.id);
+                            Wrapper::ShipMoveWrapper(ship_move) => {
+                                //println!("got ship");
+                                let index = self.other_players.iter().position(|&x| x.id == ship_move.id);
                                 match index {
-                                    Some(i) => self.other_players[i] = updated_ship,
-                                    None => self.other_players.push(updated_ship),
+                                    Some(i) => {
+                                        self.other_players[i].pos.x = ship_move.x;
+                                        self.other_players[i].pos.y = ship_move.y;
+                                    },
+                                    None => {},
                                 }
                             },
                             Wrapper::BulletWrapper(bullet) => {
-                                println!("got bullet");
+                                //println!("got bullet");
                                 self.bullets.push(bullet);
                             },
+                            Wrapper::RestartSignal => self.reset(ctx),
                             _ => {}
                         }
                     
@@ -745,7 +830,13 @@ impl EventHandler for MainState {
 
             match key {
                 KeyCode::Q => ggez::event::quit(ctx),
-                KeyCode::R => self.reset(ctx),
+                KeyCode::R => {
+                    let signal = Wrapper::RestartSignal;
+                    self.send_to_peers(signal);
+
+                    self.reset(ctx);
+
+                },
                 _ => {},
             }
 
@@ -765,7 +856,14 @@ impl EventHandler for MainState {
                 match key {
                     KeyCode::W | KeyCode::S | KeyCode::A | KeyCode::D | KeyCode::Space | KeyCode::J | KeyCode::K => {
                         match self.state {
-                            State::Loading => self.state = State::Playing,
+                            State::Loading => {
+
+                                let signal = Wrapper::StartSignal;
+                                self.send_to_peers(signal);
+
+                                self.state = State::Playing;
+                            
+                            },
                             _ => {},
                         }
                     }
