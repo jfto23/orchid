@@ -29,7 +29,7 @@ const RED: graphics::Color = graphics::Color::new(255.0, 0.0, 0.0, 1.0);
 const SCREEN_BORDER: f32 = 20.0;
 const SHIELD_COOLDOWN: f32 = 15.0;
 const SHIELD_DURATION: f32 = 2.0;
-const BOSS_HEALTH: f32 = 100.0;
+const BOSS_HEALTH: f32 = 1.0;
 const BROADCAST_TICK: f32 = 1.0/30.0;
 const PLAYER_SPAWN: Point = Point{ x: 400.0, y: 500.0};
 
@@ -392,7 +392,7 @@ fn distance_2d(p1: Point, p2: Point) -> f32{
     (((p1.x-p2.x).powf(2.0)) + ((p1.y-p2.y).powf(2.0))).sqrt()
 }
 
-#[derive(Serialize, Deserialize,)]
+#[derive(Serialize, Deserialize, Debug)]
 enum State {
     Playing,
     Won,
@@ -444,21 +444,30 @@ impl MainState {
     fn check_collisions(&mut self) {
 
         for bullet in &mut self.bullets {
-            
-            let player_distance = distance_2d(bullet.pos, self.player_ship.pos);
-            let enemy_distance = distance_2d(bullet.pos, self.enemy_ship.pos);
-
             match bullet.possession {
                 Possession::Enemy => {
-                    if player_distance < 24.0 && self.player_ship.health > 0.0 {
-                        if !self.player_ship.shield && self.enemy_ship.health > 0.0 {
-                            self.player_ship.health -= 2.0;
+                    for i in 0..(self.other_players.len()+1) {
+                        let (player_distance, mut player) = if i == self.other_players.len() {
+                            (distance_2d(bullet.pos, self.player_ship.pos), &mut self.player_ship)
                         }
-                        bullet.hit = true;
+                        else {
+                            (distance_2d(bullet.pos, self.other_players[i].pos), &mut self.other_players[i])
+                        };
+
+                        let shield = player.shield;
+                        if player_distance < 24.0 && self.enemy_ship.health > 0.0 {
+                            if !shield && player.health > 0.0 {
+                                player.health -= 2.0;
+                            }
+                            bullet.hit = true;
+                            break;
+                        }
                     }
+
                 }
 
                 Possession::Player => {
+                    let enemy_distance = distance_2d(bullet.pos, self.enemy_ship.pos);
                     if enemy_distance < 40.0 {
                         match bullet.bullet_type {
                             BulletType::Normal => self.enemy_ship.health -= 1.0,
@@ -486,6 +495,10 @@ impl MainState {
             self.shield_timer = 0.0;
             self.shield_active = 0.0;
             self.state = State::Loading;
+
+            for ship in &mut self.other_players {
+                ship.reset();
+            }
     }
 
 
@@ -620,7 +633,6 @@ impl EventHandler for MainState {
                 State::Loading => {},
                 State::Won => {},
                 _ => {
-                    /*
                     self.bullets.push(self.enemy_ship.shoot(Some(consts::PI/4.0), BulletType::Normal));
                     self.bullets.push(self.enemy_ship.shoot(Some(-1.0 * consts::PI/4.0), BulletType::Normal));
                     self.bullets.push(self.enemy_ship.shoot(None, BulletType::Normal));
@@ -633,7 +645,6 @@ impl EventHandler for MainState {
                         self.bullets.push(self.enemy_ship.shoot(Some(rand_angle2), BulletType::Normal));
 
                     }
-                    */
                 }
 
             }
@@ -644,17 +655,15 @@ impl EventHandler for MainState {
 
         self.check_collisions();
 
-        if self.player_ship.health < 0.0 {
-            self.state = State::Lost;
-        }
-        else if self.enemy_ship.health < 0.0 {
-            match self.state {
-                State::Won => {},
-                _ => {
-                    self.state = State::Won;
-                    let msg  = Wrapper::WinSignal;
-                    self.send_to_peers(msg);
-                }
+
+        if let State::Playing = self.state {
+            if self.player_ship.health < 0.0 {
+                self.state = State::Lost;
+            }
+            else if self.enemy_ship.health < 0.1 {
+                self.state = State::Won;
+                let msg  = Wrapper::WinSignal;
+                self.send_to_peers(msg);
 
             }
         }
