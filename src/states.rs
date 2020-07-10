@@ -110,26 +110,6 @@ fn check_collisions(&mut self) {
         for i in 0..self.bullets.len() {
             match self.bullets[i].possession {
                 Possession::Enemy => {
-                    /*
-                    for i in 0..(self.other_players.len()+1) {
-                        let (player_distance, mut player) = if i == self.other_players.len() {
-                            (distance_2d(bullet.pos, self.player_ship.pos), &mut self.player_ship)
-                        }
-                        else {
-                            (distance_2d(bullet.pos, self.other_players[i].pos), &mut self.other_players[i])
-                        };
-
-                        let shield = player.shield;
-                        if player_distance < 24.0 && self.enemy_ship.health > 0.0 && player.health > 0.0 {
-                            if !shield && player.health > 0.0 {
-                                player.health -= 2.0;
-                            }
-                            bullet.hit = true;
-                            break;
-                        }
-                    }
-                    */
-
                     let player_distance = distance_2d(self.bullets[i].pos, self.player_ship.pos);
                     let shield = self.player_ship.shield;
                     if player_distance < 24.0 && self.enemy_ship.health > 0.0 && self.player_ship.health > 0.0 {
@@ -228,7 +208,6 @@ fn check_collisions(&mut self) {
         // first make all ships appear
         if self.peers.len() != self.other_players.len() {
 
-            println!("loading all ships...");
             let mut buf = [0u8; 512];
             let result = self.socket.recv_from(&mut buf);
 
@@ -276,7 +255,6 @@ fn check_collisions(&mut self) {
                         let decoded: Wrapper = bincode::deserialize(&buf)?;
                         match decoded {
                             Wrapper::ConnectSignal => {
-                                println!("someone connected");
                                 let new_address = bincode::serialize(&Wrapper::AddressWrapper(src))?;
 
                                 for peer in self.peers.iter() {
@@ -306,7 +284,6 @@ fn check_collisions(&mut self) {
                         let decoded: Wrapper = bincode::deserialize(&buf)?;
                         match decoded {
                             Wrapper::AddressWrapper(address) => {
-                                println!("connected");
                                 self.peers.push(address);
                             },
                             Wrapper::StartSignal => self.state = State::Playing,
@@ -331,11 +308,9 @@ fn check_collisions(&mut self) {
         match result {
             Ok((_amt, _src)) => {
                 let decoded: Wrapper = bincode::deserialize(&buf)?;
-                println!("update");
 
                 match decoded {
                     Wrapper::ShipUpdateWrapper(ship_update) => {
-                        //println!("got ship");
                         let index = self.other_players
                             .iter()
                             .position(|&x| x.id == ship_update.id);
@@ -349,7 +324,6 @@ fn check_collisions(&mut self) {
                         }
                     },
                     Wrapper::BulletWrapper(bullet) => {
-                        //println!("got bullet");
                         self.bullets.push(bullet);
                     },
                     Wrapper::RestartSignal => self.reset(),
@@ -409,7 +383,7 @@ impl EventHandler for MainState {
         }
 
         if let State::Playing | State::Lost = self.state {
-            //self.enemy_ship.oscillate(dt, width);
+            self.enemy_ship.oscillate(dt, width);
         }
 
         for bullet in &mut self.bullets {

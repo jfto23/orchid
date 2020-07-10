@@ -4,6 +4,7 @@ mod entities;
 mod assets;
 mod network;
 
+use constants::{ PEER_PORT, HOST_PORT };
 use network::{ Network, Wrapper };
 use states::MainState;
 
@@ -55,7 +56,7 @@ fn main() -> GameResult {
 
     let (socket, network_type, rng) = match env::args().len() {
         1 => {
-            let socket = UdpSocket::bind("127.0.0.1:7777")?;
+            let socket = UdpSocket::bind(format!("127.0.0.1:{}",HOST_PORT))?;
             socket.set_nonblocking(true)?;
 
             let mut rng_thread = rand::thread_rng();
@@ -63,7 +64,7 @@ fn main() -> GameResult {
             (socket,Network::Host, Some(rng))
         }
         _ => {
-            let socket = UdpSocket::bind("127.0.0.1:7778")?;
+            let socket = UdpSocket::bind(format!("127.0.0.1:{}",PEER_PORT))?;
             socket.set_nonblocking(true)?;
 
             let host_addr: SocketAddrV4 = args[1]
