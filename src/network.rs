@@ -14,7 +14,6 @@ pub enum Wrapper {
     AddressWrapper(SocketAddr),
     AddressesWrapper(Vec<SocketAddr>),
     ShipUpdateWrapper(ShipUpdate),
-    Seed(i32),
     ConnectSignal,
     StartSignal,
     RestartSignal,

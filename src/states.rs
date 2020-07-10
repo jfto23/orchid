@@ -7,6 +7,9 @@ use crate::assets::Assets;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::error::Error;
 use std::net::{UdpSocket, SocketAddr};
+use std::f32::consts;
+
+use rand::Rng;
 
 use ggez::{graphics, Context, GameResult};
 use ggez::event::{EventHandler, KeyCode, KeyMods};
@@ -99,8 +102,7 @@ impl MainState {
             broadcast_timer: BROADCAST_TICK,
         }
     }
-
-    fn check_collisions(&mut self) {
+fn check_collisions(&mut self) {
 
         for bullet in &mut self.bullets {
             match bullet.possession {
@@ -218,15 +220,17 @@ impl MainState {
             match result {
                 Ok(_) => {
                     let decoded: Wrapper = bincode::deserialize(&buf)?;
-                    if let Wrapper::ShipWrapper(ship) = decoded {
-                        let index = self.other_players
-                            .iter()
-                            .position(|&x| x.id == ship.id);
-                        match index {
-                            Some(_) => {},
-                            None => self.other_players.push(ship),
-                        }
-
+                    match decoded {
+                        Wrapper::ShipWrapper(ship) => {
+                            let index = self.other_players
+                                .iter()
+                                .position(|&x| x.id == ship.id);
+                            match index {
+                                Some(_) => {},
+                                None => self.other_players.push(ship),
+                            }
+                        },
+                        _ => {},
                     }
                 },
                 Err(_) => {},
@@ -234,11 +238,11 @@ impl MainState {
 
         }
 
-
         // this is horrible but it's only during
         // loading phase
         let msg  = Wrapper::ShipWrapper(self.player_ship);
         self.send_to_peers(msg);
+
 
         let mut buf = [0u8; 512];
         let result = self.socket.recv_from(&mut buf);
@@ -252,6 +256,7 @@ impl MainState {
                         match decoded {
                             Wrapper::ConnectSignal => {
                                 let new_address = bincode::serialize(&Wrapper::AddressWrapper(src))?;
+
                                 for peer in self.peers.iter() {
                                     let encoded_address = bincode::serialize(&Wrapper::AddressWrapper(*peer))?;
                                     self.socket.send_to(&encoded_address, src)?;
@@ -357,11 +362,10 @@ impl EventHandler for MainState {
                     self.player_ship.shield));
 
             self.send_to_peers(movement);
-            self.broadcast_timer = BROADCAST_TICK;
         }
 
         if let State::Playing | State::Lost = self.state {
-            self.enemy_ship.oscillate(dt, width);
+            //self.enemy_ship.oscillate(dt, width);
         }
 
         for bullet in &mut self.bullets {
@@ -438,20 +442,31 @@ impl EventHandler for MainState {
                 State::Loading => {},
                 State::Won => {},
                 _ => {
-                    /*
                     self.bullets.push(self.enemy_ship.shoot(Some(consts::PI/4.0), BulletType::Normal));
                     self.bullets.push(self.enemy_ship.shoot(Some(-1.0 * consts::PI/4.0), BulletType::Normal));
                     self.bullets.push(self.enemy_ship.shoot(None, BulletType::Normal));
 
-                    let rand_angle = rand::thread_rng().gen_range(-1.0 * consts::PI/4.0, consts::PI/4.0);
-                    self.bullets.push(self.enemy_ship.shoot(Some(rand_angle), BulletType::Normal));
+                    if let Network::Host = self.network_type {
+                        let rand_angle = rand::thread_rng().gen_range(-1.0 * consts::PI/4.0, consts::PI/4.0);
 
-                    if self.enemy_ship.health < BOSS_HEALTH/2.0 {
-                        let rand_angle2 = rand::thread_rng().gen_range(-1.0 * consts::PI/4.0, consts::PI/4.0);
-                        self.bullets.push(self.enemy_ship.shoot(Some(rand_angle2), BulletType::Normal));
+                        let bullet = self.enemy_ship.shoot(Some(rand_angle), BulletType::Normal);
+                        self.bullets.push(bullet);
 
+                        let msg = Wrapper::BulletWrapper(bullet);
+                        self.send_to_peers(msg);
+
+                        if self.enemy_ship.health < BOSS_HEALTH/2.0 {
+                            let rand_angle2 = rand::thread_rng().gen_range(-1.0 * consts::PI/4.0, consts::PI/4.0);
+
+                            let bullet = self.enemy_ship.shoot(Some(rand_angle2), BulletType::Normal);
+                            self.bullets.push(bullet);
+
+                            let msg = Wrapper::BulletWrapper(bullet);
+                            self.send_to_peers(msg);
+
+                        }
                     }
-                    */
+
                 }
 
             }
@@ -480,7 +495,15 @@ impl EventHandler for MainState {
         // ==================================
 
         match self.state {
-            State::Loading => self.handle_connections(),
+            State::Loading => {
+                if self.broadcast_timer < 0.0 {
+                    self.broadcast_timer = BROADCAST_TICK;
+                    self.handle_connections()
+                }
+                else {
+                    Ok(())
+                }
+            }
             _ => self.handle_updates()
         }.unwrap();
 

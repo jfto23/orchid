@@ -530,6 +530,7 @@ dependencies = [
  "ggez",
  "mint",
  "rand 0.7.3",
+ "rand_xoshiro",
  "serde",
  "uuid",
 ]
@@ -1636,6 +1637,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cbf7e9e623549b0e21f6e97cf8ecf247c1a8fd2e8a992ae265314300b2455d5c"
 dependencies = [
  "rand_core 0.3.1",
+]
+
+[[package]]
+name = "rand_xoshiro"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9fcdd2e881d02f1d9390ae47ad8e5696a9e4be7b547a1da2afbc61973217004"
+dependencies = [
+ "rand_core 0.5.1",
+ "serde",
 ]
 
 [[package]]
