@@ -18,6 +18,7 @@ pub enum Wrapper {
     StartSignal,
     RestartSignal,
     WinSignal,
+    DeathSignal(Uuid),
 }
 
 #[derive(Serialize, Deserialize, Debug)]

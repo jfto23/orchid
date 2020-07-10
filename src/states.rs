@@ -319,6 +319,9 @@ fn check_collisions(&mut self) {
                                 self.other_players[i].pos.x = ship_update.x;
                                 self.other_players[i].pos.y = ship_update.y;
                                 self.other_players[i].shield = ship_update.shield;
+                                // this is just a safeguard to prevent
+                                // having a player both alive and dead
+                                self.other_players[i].health = 1.0;
                             },
                             None => {},
                         }
@@ -329,6 +332,15 @@ fn check_collisions(&mut self) {
                     },
                     Wrapper::RestartSignal => self.reset(),
                     Wrapper::WinSignal => self.state = State::Won,
+                    Wrapper::DeathSignal(id) => {
+                        println!("death signal");
+                        let index = self.other_players
+                            .iter()
+                            .position(|&x| x.id == id);
+                        if let Some(i) = index { 
+                            self.other_players[i].health -= 2.0;
+                        }
+                    }
                     _ => {}
                 }
 
@@ -344,6 +356,7 @@ fn check_collisions(&mut self) {
 
 impl EventHandler for MainState {
     fn update(&mut self, ctx: &mut Context) -> GameResult<()> {
+
         let dt = ggez::timer::duration_to_f64(ggez::timer::delta(ctx)) as f32;
 
         self.broadcast_timer -= dt;
@@ -362,6 +375,7 @@ impl EventHandler for MainState {
                     self.player_ship.shield));
 
             self.send_to_peers(movement);
+            self.broadcast_timer = BROADCAST_TICK;
         }
 
         if let State::Playing | State::Lost = self.state {
@@ -481,6 +495,8 @@ impl EventHandler for MainState {
         if let State::Playing = self.state {
             if self.player_ship.health < 0.0 {
                 self.state = State::Lost;
+                let signal = Wrapper::DeathSignal(self.player_ship.id);
+                self.send_to_peers(signal);
             }
             else if self.enemy_ship.health < 0.1 {
                 self.state = State::Won;
@@ -495,15 +511,7 @@ impl EventHandler for MainState {
         // ==================================
 
         match self.state {
-            State::Loading => {
-                if self.broadcast_timer < 0.0 {
-                    self.broadcast_timer = BROADCAST_TICK;
-                    self.handle_connections()
-                }
-                else {
-                    Ok(())
-                }
-            }
+            State::Loading => self.handle_connections(),
             _ => self.handle_updates()
         }.unwrap();
 
@@ -531,7 +539,9 @@ impl EventHandler for MainState {
             State::Won => {
                 self.draw_win_screen(ctx)
             },
-            State::Lost => self.draw_death_screen(ctx),
+            State::Lost => {
+                self.draw_death_screen(ctx)
+            },
             _ => Ok(()),
         }?;
 
