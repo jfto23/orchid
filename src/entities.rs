@@ -29,8 +29,8 @@ pub struct Bullet {
     pub angle: f32,
     pub pos: Point,
     pub hit: bool,
-    pub bullet_type: BulletType
-
+    pub bullet_type: BulletType,
+    pub id: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Copy, Clone)]
@@ -41,7 +41,7 @@ pub enum BulletType {
 
 
 impl Bullet {
-    pub fn new(possession: Possession, angle: f32, pos: Point, bullet_type: BulletType) -> Bullet {
+    pub fn new(possession: Possession, angle: f32, pos: Point, bullet_type: BulletType, id: Option<u64>) -> Bullet {
         let new_pos = Point{
             x: pos.x, 
             // the adjustments on y make is so the bullets don't
@@ -54,6 +54,7 @@ impl Bullet {
             pos: new_pos,
             hit: false,
             bullet_type: bullet_type,
+            id: id 
         }
     }
 
@@ -159,10 +160,10 @@ impl Ship {
 
     // the optionnal argument lets ships shoot in more directions
     // i.e bosses can shoot in diagonals
-    pub fn shoot(&self, curve: Option<f32>, bullet_type: BulletType) -> Bullet {
+    pub fn shoot(&self, curve: Option<f32>, bullet_type: BulletType, id: Option<u64>) -> Bullet {
         match curve {
-            Some(angle) => Bullet::new(self.ship_type, self.angle+angle, self.pos, BulletType::Normal),
-            _ => Bullet::new(self.ship_type, self.angle, self.pos, bullet_type),
+            Some(angle) => Bullet::new(self.ship_type, self.angle+angle, self.pos, BulletType::Normal, id),
+            _ => Bullet::new(self.ship_type, self.angle, self.pos, bullet_type, id),
         }
     }
 

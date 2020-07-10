@@ -9,6 +9,7 @@ use std::error::Error;
 use std::net::{UdpSocket, SocketAddr};
 use std::f32::consts;
 
+use rand_xoshiro::Xoshiro256Plus;
 use rand::Rng;
 
 use ggez::{graphics, Context, GameResult};
@@ -79,10 +80,11 @@ pub struct MainState {
     socket: UdpSocket,
     peers: Vec<SocketAddr>,
     broadcast_timer: f32,
+    rng: Option<Xoshiro256Plus>,
 }
 
 impl MainState {
-    pub fn new(ctx: &mut Context, network_type: Network, socket: UdpSocket) -> MainState {
+    pub fn new(ctx: &mut Context, network_type: Network, socket: UdpSocket, rng: Option<Xoshiro256Plus>) -> MainState {
         MainState {
             player_ship: Ship::new(Possession::Player),
             enemy_ship: Ship::new(Possession::Enemy),
@@ -100,13 +102,15 @@ impl MainState {
             socket: socket,
             peers: Vec::<SocketAddr>::new(),
             broadcast_timer: BROADCAST_TICK,
+            rng: rng,
         }
     }
 fn check_collisions(&mut self) {
 
-        for bullet in &mut self.bullets {
-            match bullet.possession {
+        for i in 0..self.bullets.len() {
+            match self.bullets[i].possession {
                 Possession::Enemy => {
+                    /*
                     for i in 0..(self.other_players.len()+1) {
                         let (player_distance, mut player) = if i == self.other_players.len() {
                             (distance_2d(bullet.pos, self.player_ship.pos), &mut self.player_ship)
@@ -124,18 +128,29 @@ fn check_collisions(&mut self) {
                             break;
                         }
                     }
+                    */
 
+                    let player_distance = distance_2d(self.bullets[i].pos, self.player_ship.pos);
+                    let shield = self.player_ship.shield;
+                    if player_distance < 24.0 && self.enemy_ship.health > 0.0 && self.player_ship.health > 0.0 {
+                        if !shield && self.player_ship.health > 0.0 {
+                            self.player_ship.health -= 2.0;
+                        }
+                        self.bullets[i].hit = true;
+                        let msg = Wrapper::HitSignal(self.player_ship.id, self.bullets[i].id);
+                        self.send_to_peers(msg);
+                    }
                 }
 
                 Possession::Player => {
-                    let enemy_distance = distance_2d(bullet.pos, self.enemy_ship.pos);
+                    let enemy_distance = distance_2d(self.bullets[i].pos, self.enemy_ship.pos);
                     if enemy_distance < 40.0 {
-                        match bullet.bullet_type {
+                        match self.bullets[i].bullet_type {
                             BulletType::Normal => self.enemy_ship.health -= 1.0,
                             BulletType::Special => self.enemy_ship.health -= SPECIAL_BULLET_DAMAGE,
 
                         }
-                        bullet.hit = true;
+                        self.bullets[i].hit = true;
                     }
 
                 }
@@ -238,10 +253,16 @@ fn check_collisions(&mut self) {
 
         }
 
-        // this is horrible but it's only during
-        // loading phase
-        let msg  = Wrapper::ShipWrapper(self.player_ship);
-        self.send_to_peers(msg);
+        if self.broadcast_timer < 0.0 {
+            let msg  = Wrapper::ShipWrapper(self.player_ship);
+            self.send_to_peers(msg);
+
+            if let Some(_) = self.rng.clone() {
+                let msg = Wrapper::Rng(self.rng.clone());
+                self.send_to_peers(msg);
+            }
+            self.broadcast_timer = BROADCAST_TICK;
+        }
 
 
         let mut buf = [0u8; 512];
@@ -255,6 +276,7 @@ fn check_collisions(&mut self) {
                         let decoded: Wrapper = bincode::deserialize(&buf)?;
                         match decoded {
                             Wrapper::ConnectSignal => {
+                                println!("someone connected");
                                 let new_address = bincode::serialize(&Wrapper::AddressWrapper(src))?;
 
                                 for peer in self.peers.iter() {
@@ -284,9 +306,11 @@ fn check_collisions(&mut self) {
                         let decoded: Wrapper = bincode::deserialize(&buf)?;
                         match decoded {
                             Wrapper::AddressWrapper(address) => {
+                                println!("connected");
                                 self.peers.push(address);
                             },
                             Wrapper::StartSignal => self.state = State::Playing,
+                            Wrapper::Rng(rng) => self.rng = rng,
                             _ => {}
                         }
                     },
@@ -307,6 +331,7 @@ fn check_collisions(&mut self) {
         match result {
             Ok((_amt, _src)) => {
                 let decoded: Wrapper = bincode::deserialize(&buf)?;
+                println!("update");
 
                 match decoded {
                     Wrapper::ShipUpdateWrapper(ship_update) => {
@@ -319,9 +344,6 @@ fn check_collisions(&mut self) {
                                 self.other_players[i].pos.x = ship_update.x;
                                 self.other_players[i].pos.y = ship_update.y;
                                 self.other_players[i].shield = ship_update.shield;
-                                // this is just a safeguard to prevent
-                                // having a player both alive and dead
-                                self.other_players[i].health = 1.0;
                             },
                             None => {},
                         }
@@ -332,13 +354,21 @@ fn check_collisions(&mut self) {
                     },
                     Wrapper::RestartSignal => self.reset(),
                     Wrapper::WinSignal => self.state = State::Won,
-                    Wrapper::DeathSignal(id) => {
-                        println!("death signal");
+                    Wrapper::HitSignal(ship_id, bullet_id) => {
                         let index = self.other_players
                             .iter()
-                            .position(|&x| x.id == id);
+                            .position(|&x| x.id == ship_id);
                         if let Some(i) = index { 
-                            self.other_players[i].health -= 2.0;
+                            if !self.other_players[i].shield { 
+                                self.other_players[i].health -= 2.0;
+                            }
+
+                        }
+                        let index = self.bullets
+                            .iter()
+                            .position(|&x| x.id == bullet_id);
+                        if let Some(i) = index { 
+                            self.bullets[i].hit = true;
                         }
                     }
                     _ => {}
@@ -399,7 +429,7 @@ impl EventHandler for MainState {
         if now >= self.player_fire_delay && self.input_state.fire {
             match self.state {
                 State::Playing | State::Won => {
-                    let bullet = self.player_ship.shoot(None, BulletType::Normal);
+                    let bullet = self.player_ship.shoot(None, BulletType::Normal, None);
                     self.bullets.push(bullet);
 
                     let msg = Wrapper::BulletWrapper(bullet);
@@ -414,7 +444,7 @@ impl EventHandler for MainState {
 
         self.special_timer -= dt;
         if self.input_state.special && self.special_timer < 0.0 {
-            let special_bullet = self.player_ship.shoot(None, BulletType::Special);
+            let special_bullet = self.player_ship.shoot(None, BulletType::Special, None);
 
             let msg = Wrapper::BulletWrapper(special_bullet);
             self.send_to_peers(msg);
@@ -456,30 +486,31 @@ impl EventHandler for MainState {
                 State::Loading => {},
                 State::Won => {},
                 _ => {
-                    self.bullets.push(self.enemy_ship.shoot(Some(consts::PI/4.0), BulletType::Normal));
-                    self.bullets.push(self.enemy_ship.shoot(Some(-1.0 * consts::PI/4.0), BulletType::Normal));
-                    self.bullets.push(self.enemy_ship.shoot(None, BulletType::Normal));
+                    let mut rng = self.rng.clone().unwrap();
 
-                    if let Network::Host = self.network_type {
-                        let rand_angle = rand::thread_rng().gen_range(-1.0 * consts::PI/4.0, consts::PI/4.0);
+                    self.bullets.push(self.enemy_ship.shoot(Some(consts::PI/4.0), BulletType::Normal,Some(rng.gen::<u64>())));
+                    self.bullets.push(self.enemy_ship.shoot(Some(-1.0 * consts::PI/4.0), BulletType::Normal,Some(rng.gen::<u64>())));
+                    self.bullets.push(self.enemy_ship.shoot(None, BulletType::Normal, Some(rng.gen::<u64>())));
 
-                        let bullet = self.enemy_ship.shoot(Some(rand_angle), BulletType::Normal);
+
+                    let rand_angle = rng.gen_range(-1.0 * consts::PI/4.0, consts::PI/4.0);
+                    let bullet = self.enemy_ship.shoot(Some(rand_angle), BulletType::Normal, Some(rng.gen::<u64>()));
+                    self.bullets.push(bullet);
+
+                    rng.jump();
+
+                    if self.enemy_ship.health < BOSS_HEALTH/2.0 {
+                        let rand_angle2 = rand::thread_rng().gen_range(-1.0 * consts::PI/4.0, consts::PI/4.0);
+
+                        let bullet = self.enemy_ship.shoot(Some(rand_angle2), BulletType::Normal, Some(rng.gen::<u64>()));
                         self.bullets.push(bullet);
 
                         let msg = Wrapper::BulletWrapper(bullet);
                         self.send_to_peers(msg);
 
-                        if self.enemy_ship.health < BOSS_HEALTH/2.0 {
-                            let rand_angle2 = rand::thread_rng().gen_range(-1.0 * consts::PI/4.0, consts::PI/4.0);
-
-                            let bullet = self.enemy_ship.shoot(Some(rand_angle2), BulletType::Normal);
-                            self.bullets.push(bullet);
-
-                            let msg = Wrapper::BulletWrapper(bullet);
-                            self.send_to_peers(msg);
-
-                        }
                     }
+                    rng.jump();
+                    self.rng = Some(rng);
 
                 }
 
@@ -495,8 +526,6 @@ impl EventHandler for MainState {
         if let State::Playing = self.state {
             if self.player_ship.health < 0.0 {
                 self.state = State::Lost;
-                let signal = Wrapper::DeathSignal(self.player_ship.id);
-                self.send_to_peers(signal);
             }
             else if self.enemy_ship.health < 0.1 {
                 self.state = State::Won;

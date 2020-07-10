@@ -3,6 +3,8 @@ use crate::entities::Bullet;
 
 use std::net::SocketAddr;
 
+use rand_xoshiro::Xoshiro256Plus;
+
 use serde::{Serialize, Deserialize};
 
 use uuid::Uuid;
@@ -14,11 +16,12 @@ pub enum Wrapper {
     AddressWrapper(SocketAddr),
     AddressesWrapper(Vec<SocketAddr>),
     ShipUpdateWrapper(ShipUpdate),
+    Rng(Option<Xoshiro256Plus>),
     ConnectSignal,
     StartSignal,
     RestartSignal,
     WinSignal,
-    DeathSignal(Uuid),
+    HitSignal(Uuid, Option<u64>),
 }
 
 #[derive(Serialize, Deserialize, Debug)]

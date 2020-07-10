@@ -11,6 +11,10 @@ use std::env;
 use std::path;
 use std::net::{UdpSocket, SocketAddrV4};
 
+use rand_xoshiro::rand_core::SeedableRng;
+use rand_xoshiro::Xoshiro256Plus;
+use rand::Rng;
+
 use ggez::{ContextBuilder, GameResult};
 use ggez::event;
 use ggez::conf;
@@ -49,12 +53,14 @@ fn main() -> GameResult {
     // networking
     let args: Vec<String> = env::args().collect();
 
-    let (socket, network_type) = match env::args().len() {
+    let (socket, network_type, rng) = match env::args().len() {
         1 => {
             let socket = UdpSocket::bind("127.0.0.1:7777")?;
             socket.set_nonblocking(true)?;
 
-            (socket,Network::Host)
+            let mut rng_thread = rand::thread_rng();
+            let rng = Xoshiro256Plus::seed_from_u64(rng_thread.gen::<u64>());
+            (socket,Network::Host, Some(rng))
         }
         _ => {
             let socket = UdpSocket::bind("127.0.0.1:7778")?;
@@ -71,12 +77,12 @@ fn main() -> GameResult {
             socket.send_to(&signal, host_addr)?;
 
 
-            (socket,Network::Peer)
+            (socket,Network::Peer,None)
         }
     };
 
 
-    let mut my_game = MainState::new(ctx, network_type, socket);
+    let mut my_game = MainState::new(ctx, network_type, socket, rng);
 
     event::run(ctx, event_loop, &mut my_game)
 }
