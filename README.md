@@ -3,7 +3,7 @@
 _orchid_ is a space shooter game written in Rust. You can play it
 [here](https://jfto23.github.io/orchid/) (singleplayer only).
 
-![](https://github.com/jfto23/orchid/blob/master/orchid_pic.png)
+![](https://raw.githubusercontent.com/jfto23/personal_website/gh-pages/assets/images/orchid_pic.png)
 
 ## Controls
 
